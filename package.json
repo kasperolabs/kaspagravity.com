@@ -1,0 +1,15 @@
+{
+  "name": "kaspa-gravity",
+  "version": "1.0.0",
+  "description": "Kaspa Gravity - 3D BlockDAG Visualizer",
+  "main": "dag-relay.js",
+  "scripts": {
+    "start": "node dag-relay.js",
+    "dev": "node dag-relay.js"
+  },
+  "dependencies": {
+    "ws": "^8.16.0"
+  },
+  "author": "Kaspero Labs",
+  "license": "MIT"
+}

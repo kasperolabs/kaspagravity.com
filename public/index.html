@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kaspa Gravity - 3D BlockDAG Visualizer</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Outfit:wght@200;300;400;600;700&display=swap');
+:root {
+    --bg-void: #030308;
+    --bg-panel: rgba(8, 12, 28, 0.85);
+    --bg-panel-solid: #080c1c;
+    --border-dim: rgba(73, 209, 204, 0.12);
+    --border-glow: rgba(73, 209, 204, 0.35);
+    --kas-teal: #49d1cc;
+    --kas-teal-dim: rgba(73, 209, 204, 0.5);
+    --incoming-green: #00ff88;
+    --outgoing-red: #ff4466;
+    --both-amber: #ffaa00;
+    --chain-blue: #4488ff;
+    --block-default: #49d1cc;
+    --text-primary: #e8edf5;
+    --text-dim: rgba(232, 237, 245, 0.5);
+    --text-bright: #ffffff;
+    --font-display: 'Outfit', sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg-void); font-family: var(--font-display); color: var(--text-primary); -webkit-font-smoothing: antialiased; }
+#canvas-container { position: fixed; inset: 0; z-index: 1; }
+#canvas-container canvas { display: block; }
+#top-bar { position: fixed; top: 0; left: 0; right: 0; z-index: 100; display: flex; align-items: center; justify-content: space-between; padding: 14px 24px; background: linear-gradient(180deg, rgba(3,3,8,0.95) 0%, rgba(3,3,8,0) 100%); pointer-events: none; }
+#top-bar > * { pointer-events: auto; }
+.logo-group { display: flex; align-items: center; gap: 12px; }
+.logo-mark { width: 32px; height: 32px; border-radius: 50%; background: radial-gradient(circle at 30% 30%, var(--kas-teal), #1a4a48); box-shadow: 0 0 20px rgba(73, 209, 204, 0.3); animation: pulse-glow 3s ease-in-out infinite; }
+@keyframes pulse-glow { 0%, 100% { box-shadow: 0 0 20px rgba(73,209,204,0.3); } 50% { box-shadow: 0 0 35px rgba(73,209,204,0.5); } }
+.logo-text { font-family: var(--font-display); font-weight: 700; font-size: 18px; letter-spacing: 0.5px; color: var(--text-bright); }
+.logo-text span { font-weight: 300; color: var(--kas-teal); }
+#status-bar { display: flex; align-items: center; gap: 20px; font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; background: #ff4444; transition: background 0.3s; }
+.status-dot.connected { background: var(--incoming-green); box-shadow: 0 0 8px rgba(0,255,136,0.5); }
+.stat-item { display: flex; align-items: center; gap: 6px; }
+.stat-value { color: var(--kas-teal); font-weight: 500; }
+#address-panel { position: fixed; top: 60px; left: 16px; z-index: 100; width: 340px; max-height: calc(100vh - 80px); display: flex; flex-direction: column; pointer-events: auto; }
+.panel-section { background: var(--bg-panel); backdrop-filter: blur(20px); border: 1px solid var(--border-dim); border-radius: 10px; padding: 16px; margin-bottom: 8px; }
+.panel-title { font-family: var(--font-mono); font-size: 10px; font-weight: 500; text-transform: uppercase; letter-spacing: 1.5px; color: var(--kas-teal-dim); margin-bottom: 12px; }
+#address-input-row { display: flex; gap: 8px; }
+#address-input { flex: 1; background: rgba(255,255,255,0.04); border: 1px solid var(--border-dim); border-radius: 6px; padding: 8px 12px; font-family: var(--font-mono); font-size: 11px; color: var(--text-primary); outline: none; transition: border-color 0.2s; }
+#address-input::placeholder { color: var(--text-dim); }
+#address-input:focus { border-color: var(--kas-teal); }
+#btn-add-address { background: var(--kas-teal); color: var(--bg-void); border: none; border-radius: 6px; padding: 8px 14px; font-family: var(--font-mono); font-size: 11px; font-weight: 700; cursor: pointer; transition: all 0.15s; white-space: nowrap; }
+#btn-add-address:hover { background: #5de0db; transform: scale(1.03); }
+#watched-list { max-height: 200px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+#watched-list::-webkit-scrollbar { width: 4px; }
+#watched-list::-webkit-scrollbar-thumb { background: var(--border-dim); border-radius: 2px; }
+.watched-addr { display: flex; align-items: center; justify-content: space-between; padding: 6px 10px; background: rgba(255,255,255,0.02); border-radius: 5px; font-family: var(--font-mono); font-size: 10px; gap: 8px; }
+.watched-addr .addr-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-dim); }
+.watched-addr .addr-remove { color: var(--outgoing-red); cursor: pointer; font-size: 14px; opacity: 0.5; transition: opacity 0.15s; flex-shrink: 0; }
+.watched-addr .addr-remove:hover { opacity: 1; }
+#btn-clear-all { background: none; border: 1px solid rgba(255,68,102,0.3); color: var(--outgoing-red); border-radius: 5px; padding: 5px 10px; font-family: var(--font-mono); font-size: 10px; cursor: pointer; margin-top: 8px; transition: all 0.15s; }
+#btn-clear-all:hover { background: rgba(255,68,102,0.1); }
+.legend-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); }
+.legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+#alerts-feed { position: fixed; bottom: 16px; right: 16px; z-index: 100; width: 360px; max-height: 300px; overflow-y: auto; display: flex; flex-direction: column-reverse; gap: 6px; pointer-events: auto; }
+.alert-item { background: var(--bg-panel); backdrop-filter: blur(16px); border: 1px solid var(--border-dim); border-radius: 8px; padding: 10px 14px; font-family: var(--font-mono); font-size: 10px; animation: alertSlideIn 0.3s ease-out; cursor: pointer; transition: border-color 0.2s; }
+.alert-item:hover { border-color: var(--border-glow); }
+.alert-item.incoming { border-left: 3px solid var(--incoming-green); }
+.alert-item.outgoing { border-left: 3px solid var(--outgoing-red); }
+.alert-item.both { border-left: 3px solid var(--both-amber); }
+.alert-header { display: flex; justify-content: space-between; margin-bottom: 4px; }
+.alert-direction { font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
+.alert-direction.incoming { color: var(--incoming-green); }
+.alert-direction.outgoing { color: var(--outgoing-red); }
+.alert-direction.both { color: var(--both-amber); }
+.alert-time { color: var(--text-dim); }
+.alert-addr { color: var(--text-dim); margin-bottom: 2px; }
+.alert-amount { color: var(--text-primary); }
+@keyframes alertSlideIn { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }
+#camera-controls { position: fixed; bottom: 16px; left: 16px; z-index: 100; display: flex; gap: 6px; pointer-events: auto; }
+.cam-btn { background: var(--bg-panel); backdrop-filter: blur(16px); border: 1px solid var(--border-dim); border-radius: 8px; padding: 8px 14px; font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); cursor: pointer; transition: all 0.15s; }
+.cam-btn:hover { border-color: var(--border-glow); color: var(--text-primary); }
+.cam-btn.active { border-color: var(--kas-teal); color: var(--kas-teal); }
+#block-tooltip { position: fixed; z-index: 200; background: var(--bg-panel-solid); border: 1px solid var(--border-glow); border-radius: 8px; padding: 12px 16px; font-family: var(--font-mono); font-size: 10px; pointer-events: none; opacity: 0; transition: opacity 0.15s; max-width: 320px; }
+#block-tooltip.visible { opacity: 1; }
+.tt-hash { color: var(--kas-teal); word-break: break-all; margin-bottom: 6px; }
+.tt-row { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 3px; }
+.tt-label { color: var(--text-dim); }
+.tt-value { color: var(--text-primary); }
+#loading-overlay { position: fixed; inset: 0; z-index: 500; background: var(--bg-void); display: flex; flex-direction: column; align-items: center; justify-content: center; transition: opacity 0.6s; }
+#loading-overlay.hidden { opacity: 0; pointer-events: none; }
+.loading-text { font-family: var(--font-display); font-weight: 200; font-size: 24px; color: var(--kas-teal); letter-spacing: 4px; margin-top: 24px; }
+.loading-sub { font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); margin-top: 8px; }
+@keyframes shake { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-4px); } 75% { transform: translateX(4px); } }
+@media (max-width: 768px) { #address-panel { width: calc(100vw - 32px); } #alerts-feed { width: calc(100vw - 32px); } }
+</style>
+</head>
+<body>
+<div id="loading-overlay">
+    <div class="logo-mark" style="width:48px;height:48px;"></div>
+    <div class="loading-text">KASPA GRAVITY</div>
+    <div class="loading-sub" id="loading-status">Connecting to node...</div>
+</div>
+<div id="top-bar">
+    <div class="logo-group">
+        <div class="logo-mark"></div>
+        <div class="logo-text">KASPA <span>GRAVITY</span></div>
+    </div>
+    <div id="status-bar">
+        <div class="stat-item"><div class="status-dot" id="conn-dot"></div><span id="conn-text">Connecting...</span></div>
+        <div class="stat-item"><span class="stat-label">BPS</span><span class="stat-value" id="stat-bps">--</span></div>
+        <div class="stat-item"><span class="stat-label">DAA</span><span class="stat-value" id="stat-daa">--</span></div>
+        <div class="stat-item"><span class="stat-label">VIEWERS</span><span class="stat-value" id="stat-viewers">--</span></div>
+    </div>
+</div>
+<div id="address-panel">
+    <div class="panel-section">
+        <div class="panel-title">Track Addresses</div>
+        <div id="address-input-row">
+            <input type="text" id="address-input" placeholder="kaspa:qr..." spellcheck="false" />
+            <button id="btn-add-address">+ ADD</button>
+        </div>
+        <div id="watched-list"></div>
+        <button id="btn-clear-all" style="display:none;">Clear All</button>
+    </div>
+    <div class="panel-section">
+        <div class="panel-title">Legend</div>
+        <div class="legend-row"><div class="legend-dot" style="background:var(--block-default)"></div> Regular block</div>
+        <div class="legend-row"><div class="legend-dot" style="background:var(--chain-blue)"></div> Chain block (selected parent)</div>
+        <div class="legend-row"><div class="legend-dot" style="background:var(--incoming-green)"></div> Incoming KAS to watched address</div>
+        <div class="legend-row"><div class="legend-dot" style="background:var(--outgoing-red)"></div> Outgoing KAS from watched address</div>
+        <div class="legend-row"><div class="legend-dot" style="background:var(--both-amber)"></div> Both incoming &amp; outgoing</div>
+    </div>
+</div>
+<div id="alerts-feed"></div>
+<div id="camera-controls">
+    <button class="cam-btn active" data-mode="follow">Follow</button>
+    <button class="cam-btn" data-mode="orbit">Orbit</button>
+    <button class="cam-btn" data-mode="free">Free</button>
+</div>
+<div id="block-tooltip">
+    <div class="tt-hash" id="tt-hash"></div>
+    <div class="tt-row"><span class="tt-label">DAA Score</span><span class="tt-value" id="tt-daa"></span></div>
+    <div class="tt-row"><span class="tt-label">Transactions</span><span class="tt-value" id="tt-txcount"></span></div>
+    <div class="tt-row"><span class="tt-label">Parents</span><span class="tt-value" id="tt-parents"></span></div>
+    <div class="tt-row"><span class="tt-label">Blue Score</span><span class="tt-value" id="tt-blue"></span></div>
+    <div style="margin-top:6px;color:var(--text-dim);font-size:9px;">Click to open in explorer</div>
+</div>
+<div id="canvas-container"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function() {
+'use strict';
+
+// === CONFIG ===
+var CONFIG = {
+    wsUrl: (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host,
+    maxVisibleBlocks: 400,
+    blockSize: 0.25,
+    blockSizeMatched: 0.4,
+    cameraFollowSpeed: 0.04,
+    edgeOpacity: 0.12,
+    maxEdgesPerBlock: 3,
+    explorerBase: 'https://explorer.kaspa.org',
+    zScale: 0.12,
+    daaWindow: 5000
+};
+
+// === STATE ===
+var state = {
+    ws: null,
+    connected: false,
+    blocks: new Map(),
+    blockMeshes: new Map(),
+    edgeLines: [],
+    daaMin: Infinity,
+    latestDaa: 0,
+    watchedAddresses: new Set(),
+    cameraMode: 'follow',
+    hoveredBlock: null,
+    mouseNDC: new THREE.Vector2(),
+    bpsCounter: { count: 0, lastTime: Date.now(), value: 0 },
+    explorerBase: CONFIG.explorerBase
+};
+// Expose for debug
+window._dbg = state; window._cfg = CONFIG;
+
+// === THREE.JS SETUP ===
+var container = document.getElementById('canvas-container');
+var scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x030308, 0.008);
+
+var camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 800);
+camera.position.set(8, 4, 5);
+
+var renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setClearColor(0x030308);
+container.appendChild(renderer.domElement);
+
+var ambientLight = new THREE.AmbientLight(0x334466, 0.6);
+scene.add(ambientLight);
+var dirLight = new THREE.DirectionalLight(0x49d1cc, 0.4);
+dirLight.position.set(10, 20, 10);
+scene.add(dirLight);
+var pointLight = new THREE.PointLight(0x49d1cc, 0.8, 150);
+scene.add(pointLight);
+
+// Starfield
+(function() {
+    var g = new THREE.BufferGeometry();
+    var p = new Float32Array(3000 * 3);
+    for (var i = 0; i < p.length; i++) p[i] = (Math.random() - 0.5) * 500;
+    g.setAttribute('position', new THREE.BufferAttribute(p, 3));
+    scene.add(new THREE.Points(g, new THREE.PointsMaterial({ color: 0x667799, size: 0.15, transparent: true, opacity: 0.5 })));
+})();
+
+// Spine guide line
+var spinePoints = [];
+for (var i = 0; i < 2000; i++) spinePoints.push(new THREE.Vector3(0, 0, -i * CONFIG.zScale));
+var spineLine = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints(spinePoints),
+    new THREE.LineBasicMaterial({ color: 0x49d1cc, transparent: true, opacity: 0.05 })
+);
+scene.add(spineLine);
+
+// Raycaster
+var raycaster = new THREE.Raycaster();
+
+// Materials
+var materials = {
+    def: new THREE.MeshPhongMaterial({ color: 0x49d1cc, emissive: 0x1a4a48, emissiveIntensity: 0.3, shininess: 60, transparent: true, opacity: 0.85 }),
+    chain: new THREE.MeshPhongMaterial({ color: 0x4488ff, emissive: 0x1a2a66, emissiveIntensity: 0.4, shininess: 80, transparent: true, opacity: 0.9 }),
+    inc: new THREE.MeshPhongMaterial({ color: 0x00ff88, emissive: 0x00aa44, emissiveIntensity: 0.6, shininess: 100 }),
+    out: new THREE.MeshPhongMaterial({ color: 0xff4466, emissive: 0xaa2233, emissiveIntensity: 0.6, shininess: 100 }),
+    both: new THREE.MeshPhongMaterial({ color: 0xffaa00, emissive: 0xaa6600, emissiveIntensity: 0.6, shininess: 100 }),
+    hover: new THREE.MeshPhongMaterial({ color: 0xffffff, emissive: 0x888888, emissiveIntensity: 0.8, shininess: 120 })
+};
+
+var geoBlock = new THREE.IcosahedronGeometry(CONFIG.blockSize, 1);
+var geoMatched = new THREE.IcosahedronGeometry(CONFIG.blockSizeMatched, 2);
+
+// Track blocks per DAA for spread
+var blocksPerDaa = new Map();
+
+// === POSITIONING ===
+function daaToPosition(daaScore, indexInDaa) {
+    var daaOffset = daaScore - state.daaMin;
+    var z = daaOffset * CONFIG.zScale;
+    
+    /* Helix: rotate around Z axis as DAA advances */
+    var helixAngle = daaOffset * 0.06;
+    var helixRadius = 3.0;
+    
+    /* Center of helix at this DAA score */
+    var cx = Math.cos(helixAngle) * helixRadius;
+    var cy = Math.sin(helixAngle) * helixRadius;
+    
+    /* Parallel blocks spread outward from helix center */
+    if (indexInDaa === 0) return new THREE.Vector3(cx, cy, z);
+    
+    var spreadAngle = helixAngle + indexInDaa * 2.399;
+    var spreadRadius = 0.8 + indexInDaa * 0.4;
+    var x = cx + Math.cos(spreadAngle) * spreadRadius;
+    var y = cy + Math.sin(spreadAngle) * spreadRadius;
+    
+    return new THREE.Vector3(x, y, z);
+}
+
+function getBlockIndexInDaa(daaScore) {
+    var c = blocksPerDaa.get(daaScore) || 0;
+    blocksPerDaa.set(daaScore, c + 1);
+    return c;
+}
+
+// === ADD BLOCK ===
+function addBlockToScene(block, matchInfo) {
+    try {
+        if (!block || !block.hash) return;
+        if (state.blockMeshes.has(block.hash)) return;
+
+        // Update DAA range
+        state.daaMin = Math.min(state.daaMin, block.daaScore);
+        state.latestDaa = Math.max(state.latestDaa, block.daaScore);
+
+        var idx = getBlockIndexInDaa(block.daaScore);
+        var pos = daaToPosition(block.daaScore, idx);
+
+        var mat, geo;
+        if (matchInfo) {
+            mat = matchInfo.direction === 'incoming' ? materials.inc : matchInfo.direction === 'outgoing' ? materials.out : materials.both;
+            geo = geoMatched;
+        } else {
+            mat = materials.def;
+            geo = geoBlock;
+        }
+
+        var mesh = new THREE.Mesh(geo, mat);
+        mesh.position.copy(pos);
+        mesh.userData = { block: block, matchInfo: matchInfo, originalMaterial: mat, idx: idx };
+        scene.add(mesh);
+        state.blockMeshes.set(block.hash, mesh);
+        state.blocks.set(block.hash, { hash: block.hash, daaScore: block.daaScore, position: pos, parentHashes: block.parentHashes, txCount: block.txCount, blueScore: block.blueScore, timestamp: block.timestamp });
+
+        // Edges to parents
+        if (block.parentHashes) {
+            var parents = block.parentHashes.slice(0, CONFIG.maxEdgesPerBlock);
+            for (var i = 0; i < parents.length; i++) {
+                var pd = state.blocks.get(parents[i]);
+                if (!pd) continue;
+                var lg = new THREE.BufferGeometry().setFromPoints([pos, pd.position]);
+                var lm = new THREE.LineBasicMaterial({ color: 0x49d1cc, transparent: true, opacity: CONFIG.edgeOpacity });
+                var line = new THREE.Line(lg, lm);
+                scene.add(line);
+                state.edgeLines.push(line);
+            }
+        }
+
+        // Glow for matched
+        if (matchInfo) {
+            var gc = matchInfo.direction === 'incoming' ? 0x00ff88 : matchInfo.direction === 'outgoing' ? 0xff4466 : 0xffaa00;
+            var gm = new THREE.Mesh(
+                new THREE.IcosahedronGeometry(CONFIG.blockSizeMatched * 2.5, 1),
+                new THREE.MeshBasicMaterial({ color: gc, transparent: true, opacity: 0.15, side: THREE.BackSide })
+            );
+            mesh.add(gm);
+        }
+
+        state.bpsCounter.count++;
+
+        // Prune every 50 blocks instead of every block
+        if (state.bpsCounter.count % 50 === 0) pruneOldBlocks();
+    } catch(err) {
+        console.error('[addBlock]', err.message);
+    }
+}
+
+var _pruneRunning = false;
+function pruneOldBlocks() {
+    if (_pruneRunning) return;
+    if (state.blockMeshes.size <= CONFIG.maxVisibleBlocks) return;
+    _pruneRunning = true;
+
+    try {
+        var cutoff = state.latestDaa - CONFIG.daaWindow;
+
+        // Collect hashes to remove first, then delete (avoid delete-while-iterating)
+        var toRemove = [];
+        state.blocks.forEach(function(data, hash) {
+            if (data.daaScore < cutoff) toRemove.push(hash);
+        });
+
+        for (var i = 0; i < toRemove.length; i++) {
+            var hash = toRemove[i];
+            var m = state.blockMeshes.get(hash);
+            if (m) { scene.remove(m); if (m.geometry) m.geometry.dispose(); }
+            state.blockMeshes.delete(hash);
+            state.blocks.delete(hash);
+        }
+
+        // Prune edges
+        var maxE = state.blockMeshes.size * 2;
+        while (state.edgeLines.length > maxE) {
+            var l = state.edgeLines.shift();
+            scene.remove(l);
+            if (l.geometry) l.geometry.dispose();
+            if (l.material) l.material.dispose();
+        }
+
+        // Prune blocksPerDaa
+        var daaToRemove = [];
+        blocksPerDaa.forEach(function(v, k) { if (k < cutoff) daaToRemove.push(k); });
+        for (var j = 0; j < daaToRemove.length; j++) blocksPerDaa.delete(daaToRemove[j]);
+
+        // Update daaMin
+        if (state.blocks.size > 0) {
+            var mn = Infinity;
+            state.blocks.forEach(function(d) { if (d.daaScore < mn) mn = d.daaScore; });
+            state.daaMin = mn;
+        }
+    } catch(err) {
+        console.error('[prune]', err.message);
+    }
+    _pruneRunning = false;
+}
+
+// === CAMERA ===
+var cameraTarget = new THREE.Vector3();
+var orbitAngle = 0;
+
+function updateCamera(dt) {
+    var maxZ = 0;
+    state.blockMeshes.forEach(function(m) { if (m.position.z > maxZ) maxZ = m.position.z; });
+    if (state.cameraMode === "follow") {
+        var tp = new THREE.Vector3(6, 3, maxZ - 8);
+        camera.position.lerp(tp, CONFIG.cameraFollowSpeed);
+        cameraTarget.lerp(new THREE.Vector3(0, 0, maxZ + 5), CONFIG.cameraFollowSpeed);
+        camera.lookAt(cameraTarget);
+    } else if (state.cameraMode === "orbit") {
+        orbitAngle += dt * 0.2;
+        camera.position.set(Math.cos(orbitAngle) * 12, 4 + Math.sin(orbitAngle * 0.3) * 2, maxZ + Math.sin(orbitAngle * 0.5) * 6);
+        cameraTarget.set(0, 0, maxZ);
+        camera.lookAt(cameraTarget);
+    }
+    pointLight.position.copy(camera.position);
+}
+
+// === MOUSE ===
+function onMouseMove(e) {
+    state.mouseNDC.x = (e.clientX / window.innerWidth) * 2 - 1;
+    state.mouseNDC.y = -(e.clientY / window.innerHeight) * 2 + 1;
+    if (state.cameraMode === 'free' && e.buttons === 1) {
+        camera.rotation.y -= e.movementX * 0.003;
+        camera.rotation.x = Math.max(-1, Math.min(1, camera.rotation.x - e.movementY * 0.003));
+    }
+}
+function onWheel(e) {
+    if (state.cameraMode === 'free') {
+        var d = new THREE.Vector3(); camera.getWorldDirection(d);
+        camera.position.addScaledVector(d, -e.deltaY * 0.05);
+    }
+}
+function onClick() {
+    raycaster.setFromCamera(state.mouseNDC, camera);
+    var hits = raycaster.intersectObjects(Array.from(state.blockMeshes.values()));
+    if (hits.length > 0) {
+        var b = hits[0].object.userData.block;
+        if (b && b.hash) window.open(state.explorerBase + '/blocks/' + b.hash, '_blank');
+    }
+}
+function checkHover() {
+    raycaster.setFromCamera(state.mouseNDC, camera);
+    var hits = raycaster.intersectObjects(Array.from(state.blockMeshes.values()));
+    var tt = document.getElementById('block-tooltip');
+
+    if (state.hoveredBlock) {
+        var pm = state.blockMeshes.get(state.hoveredBlock);
+        if (pm) pm.material = pm.userData.originalMaterial;
+        state.hoveredBlock = null;
+    }
+    if (hits.length > 0) {
+        var mesh = hits[0].object;
+        var bl = mesh.userData.block;
+        if (!bl) return;
+        state.hoveredBlock = bl.hash;
+        mesh.material = materials.hover;
+        document.getElementById('tt-hash').textContent = bl.hash;
+        document.getElementById('tt-daa').textContent = (bl.daaScore || 0).toLocaleString();
+        document.getElementById('tt-txcount').textContent = bl.txCount || '--';
+        document.getElementById('tt-parents').textContent = bl.parentHashes ? bl.parentHashes.length : '--';
+        document.getElementById('tt-blue').textContent = (bl.blueScore || 0).toLocaleString();
+        var mx = (state.mouseNDC.x + 1) / 2 * window.innerWidth;
+        var my = (1 - (state.mouseNDC.y + 1) / 2) * window.innerHeight;
+        tt.style.left = (mx + 16) + 'px';
+        tt.style.top = (my - 20) + 'px';
+        tt.classList.add('visible');
+        renderer.domElement.style.cursor = 'pointer';
+    } else {
+        tt.classList.remove('visible');
+        renderer.domElement.style.cursor = 'default';
+    }
+}
+
+// === UI: ADDRESSES ===
+function addWatchedAddress(addr) {
+    addr = addr.trim();
+    if (!addr.startsWith('kaspa:') || addr.length < 30) { document.getElementById('address-input').style.borderColor = 'var(--outgoing-red)'; setTimeout(function() { document.getElementById('address-input').style.borderColor = ''; }, 1000); return; }
+    if (state.watchedAddresses.has(addr)) return;
+    state.watchedAddresses.add(addr);
+    syncAddresses();
+    renderWatched();
+    document.getElementById('address-input').value = '';
+}
+function removeAddr(addr) { state.watchedAddresses.delete(addr); syncAddresses(); renderWatched(); }
+function clearAll() { state.watchedAddresses.clear(); if (state.ws && state.ws.readyState === WebSocket.OPEN) state.ws.send(JSON.stringify({ type: 'unwatchAll' })); renderWatched(); }
+function syncAddresses() { if (state.ws && state.ws.readyState === WebSocket.OPEN) state.ws.send(JSON.stringify({ type: 'watchAddresses', addresses: Array.from(state.watchedAddresses) })); }
+function renderWatched() {
+    var list = document.getElementById('watched-list');
+    var btn = document.getElementById('btn-clear-all');
+    list.innerHTML = '';
+    state.watchedAddresses.forEach(function(addr) {
+        var d = document.createElement('div'); d.className = 'watched-addr';
+        d.innerHTML = '<span class="addr-text" title="' + addr + '">' + addr + '</span><span class="addr-remove" data-addr="' + addr + '">&times;</span>';
+        list.appendChild(d);
+    });
+    btn.style.display = state.watchedAddresses.size > 0 ? 'block' : 'none';
+    list.querySelectorAll('.addr-remove').forEach(function(el) { el.addEventListener('click', function() { removeAddr(el.dataset.addr); }); });
+}
+
+// === UI: ALERTS ===
+function addAlert(matchInfo, block) {
+    var feed = document.getElementById('alerts-feed');
+    var div = document.createElement('div');
+    div.className = 'alert-item ' + matchInfo.direction;
+    var time = new Date().toLocaleTimeString();
+    var sa = matchInfo.address.substring(0, 16) + '...' + matchInfo.address.slice(-8);
+    var amt = '';
+    if (matchInfo.incomingKAS > 0) amt += '<span style="color:var(--incoming-green)">+' + matchInfo.incomingKAS.toFixed(4) + ' KAS</span>';
+    if (matchInfo.outgoingKAS > 0) { if (amt) amt += ' / '; amt += '<span style="color:var(--outgoing-red)">-' + matchInfo.outgoingKAS.toFixed(4) + ' KAS</span>'; }
+    div.innerHTML = '<div class="alert-header"><span class="alert-direction ' + matchInfo.direction + '">' + matchInfo.direction.toUpperCase() + '</span><span class="alert-time">' + time + '</span></div><div class="alert-addr">' + sa + '</div><div class="alert-amount">' + amt + '</div>';
+    div.addEventListener('click', function() { window.open(state.explorerBase + '/blocks/' + block.hash, '_blank'); });
+    feed.prepend(div);
+    while (feed.children.length > 30) feed.removeChild(feed.lastChild);
+}
+
+// === STATS ===
+function updateStats() {
+    var now = Date.now();
+    var elapsed = (now - state.bpsCounter.lastTime) / 1000;
+    if (elapsed >= 2) {
+        state.bpsCounter.value = (state.bpsCounter.count / elapsed).toFixed(1);
+        state.bpsCounter.count = 0;
+        state.bpsCounter.lastTime = now;
+    }
+    document.getElementById('stat-bps').textContent = state.bpsCounter.value || '--';
+    document.getElementById('stat-daa').textContent = state.latestDaa ? state.latestDaa.toLocaleString() : '--';
+}
+
+// === WEBSOCKET ===
+function connectRelay() {
+    document.getElementById('loading-status').textContent = 'Connecting to relay...';
+    state.ws = new WebSocket(CONFIG.wsUrl);
+    state.ws.onopen = function() { if (state.watchedAddresses.size > 0) syncAddresses(); };
+    state.ws.onmessage = function(e) { var msg; try { msg = JSON.parse(e.data); } catch { return; } handleRelayMessage(msg); };
+    state.ws.onclose = function() { state.connected = false; updateConnUI(false); setTimeout(connectRelay, 3000); };
+    state.ws.onerror = function() {};
+}
+
+function handleRelayMessage(msg) {
+    switch (msg.type) {
+        case 'welcome':
+            state.connected = true;
+            state.explorerBase = msg.explorerBase || CONFIG.explorerBase;
+            updateConnUI(true);
+            document.getElementById('loading-status').textContent = 'Loading blocks...';
+            if (msg.dagInfo) { state.latestDaa = parseInt(msg.dagInfo.virtualDaaScore || '0'); state.daaMin = state.latestDaa - 3000; console.log('[welcome] seeded daaMin:', state.daaMin, 'latestDaa:', state.latestDaa); }
+            break;
+        case 'status':
+            state.connected = msg.connected;
+            updateConnUI(msg.connected);
+            break;
+        case 'history':
+            if (msg.blocks && msg.blocks.length > 0) {
+                var blocks = msg.blocks;
+                var i = 0;
+                (function batch() {
+                    var end = Math.min(i + 40, blocks.length);
+                    for (; i < end; i++) addBlockToScene(blocks[i], null);
+                    if (i < blocks.length) requestAnimationFrame(batch);
+                    else document.getElementById('loading-overlay').classList.add('hidden');
+                })();
+            } else {
+                document.getElementById('loading-overlay').classList.add('hidden');
+            }
+            break;
+        case 'block':
+            addBlockToScene(msg.block, msg.matches && msg.matches.length > 0 ? msg.matches[0] : null);
+            if (msg.matches) { for (var j = 0; j < msg.matches.length; j++) addAlert(msg.matches[j], msg.block); }
+            break;
+        case 'watchConfirm': break;
+        case 'pong': break;
+    }
+}
+
+function updateConnUI(connected) {
+    document.getElementById('conn-dot').classList.toggle('connected', connected);
+    document.getElementById('conn-text').textContent = connected ? 'Node synced' : 'Reconnecting...';
+}
+
+// === ANIMATE ===
+var lastTime = performance.now();
+function animate() {
+    requestAnimationFrame(animate);
+    var now = performance.now();
+    var dt = (now - lastTime) / 1000;
+    lastTime = now;
+
+    updateCamera(dt);
+
+    // Spin matched blocks
+    for (var entry of state.blockMeshes) {
+        var m = entry[1];
+        if (m.userData.matchInfo) { m.rotation.y += dt * 1.5; m.rotation.x += dt * 0.5; }
+    }
+
+    // Move spine
+    spineLine.position.z = (state.latestDaa - state.daaMin) * CONFIG.zScale - 120;
+
+    checkHover();
+    updateStats();
+    renderer.render(scene, camera);
+}
+
+// === EVENTS ===
+window.addEventListener('resize', function() { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); });
+renderer.domElement.addEventListener('mousemove', onMouseMove);
+renderer.domElement.addEventListener('wheel', onWheel);
+renderer.domElement.addEventListener('click', onClick);
+document.getElementById('btn-add-address').addEventListener('click', function() { addWatchedAddress(document.getElementById('address-input').value); });
+document.getElementById('address-input').addEventListener('keydown', function(e) { if (e.key === 'Enter') addWatchedAddress(e.target.value); });
+document.getElementById('btn-clear-all').addEventListener('click', clearAll);
+document.querySelectorAll('.cam-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+        document.querySelectorAll('.cam-btn').forEach(function(b) { b.classList.remove('active'); });
+        btn.classList.add('active');
+        state.cameraMode = btn.dataset.mode;
+    });
+});
+setInterval(function() { if (state.ws && state.ws.readyState === WebSocket.OPEN) state.ws.send(JSON.stringify({ type: 'ping' })); }, 30000);
+
+// === INIT ===
+animate();
+connectRelay();
+
+})();
+</script>
+</body>
+</html>
