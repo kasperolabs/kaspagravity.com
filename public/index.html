@@ -247,23 +247,15 @@ var blocksPerDaa = new Map();
 function daaToPosition(daaScore, indexInDaa) {
     var daaOffset = daaScore - state.daaMin;
     var z = daaOffset * CONFIG.zScale;
-    
-    /* Helix: rotate around Z axis as DAA advances */
     var helixAngle = daaOffset * 0.06;
     var helixRadius = 3.0;
-    
-    /* Center of helix at this DAA score */
     var cx = Math.cos(helixAngle) * helixRadius;
     var cy = Math.sin(helixAngle) * helixRadius;
-    
-    /* Parallel blocks spread outward from helix center */
     if (indexInDaa === 0) return new THREE.Vector3(cx, cy, z);
-    
     var spreadAngle = helixAngle + indexInDaa * 2.399;
     var spreadRadius = 0.8 + indexInDaa * 0.4;
     var x = cx + Math.cos(spreadAngle) * spreadRadius;
     var y = cy + Math.sin(spreadAngle) * spreadRadius;
-    
     return new THREE.Vector3(x, y, z);
 }
 
@@ -280,7 +272,7 @@ function addBlockToScene(block, matchInfo) {
         if (state.blockMeshes.has(block.hash)) return;
 
         // Update DAA range
-        state.daaMin = Math.min(state.daaMin, block.daaScore);
+        if (state.daaMin === Infinity) state.daaMin = block.daaScore;
         state.latestDaa = Math.max(state.latestDaa, block.daaScore);
 
         var idx = getBlockIndexInDaa(block.daaScore);
@@ -533,7 +525,7 @@ function handleRelayMessage(msg) {
             state.explorerBase = msg.explorerBase || CONFIG.explorerBase;
             updateConnUI(true);
             document.getElementById('loading-status').textContent = 'Loading blocks...';
-            if (msg.dagInfo) { state.latestDaa = parseInt(msg.dagInfo.virtualDaaScore || '0'); state.daaMin = state.latestDaa - 3000; console.log('[welcome] seeded daaMin:', state.daaMin, 'latestDaa:', state.latestDaa); }
+            if (msg.dagInfo) { state.latestDaa = parseInt(msg.dagInfo.virtualDaaScore || '0'); state.daaMin = state.latestDaa - 3000; }
             break;
         case 'status':
             state.connected = msg.connected;
@@ -557,7 +549,7 @@ function handleRelayMessage(msg) {
             addBlockToScene(msg.block, msg.matches && msg.matches.length > 0 ? msg.matches[0] : null);
             if (msg.matches) { for (var j = 0; j < msg.matches.length; j++) addAlert(msg.matches[j], msg.block); }
             break;
-        case 'watchConfirm': break;
+        case 'watchConfirm': break; case 'addressAlert': if (msg.match) { addAlert(msg.match, { hash: msg.blockHash || 'unknown', daaScore: state.latestDaa }); } break;
         case 'pong': break;
     }
 }
@@ -595,6 +587,7 @@ function animate() {
 window.addEventListener('resize', function() { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); });
 renderer.domElement.addEventListener('mousemove', onMouseMove);
 renderer.domElement.addEventListener('wheel', onWheel);
+renderer.domElement.addEventListener('wheel', onWheel);
 renderer.domElement.addEventListener('click', onClick);
 document.getElementById('btn-add-address').addEventListener('click', function() { addWatchedAddress(document.getElementById('address-input').value); });
 document.getElementById('address-input').addEventListener('keydown', function(e) { if (e.key === 'Enter') addWatchedAddress(e.target.value); });
@@ -615,4 +608,5 @@ connectRelay();
 })();
 </script>
 </body>
+</html>
 </html>

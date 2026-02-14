@@ -362,6 +362,115 @@ wss.on('connection', (ws, req) => {
 });
 
 // =============================================
+// Real-time Address Monitoring (Kaspa REST API)
+// =============================================
+
+const https = require('https');
+const KASPA_API = 'https://api.kaspa.org';
+const ADDRESS_POLL_INTERVAL = 2000; // Poll watched addresses every 2s
+let addressPollTimer = null;
+const lastSeenTxIds = new Map(); // address -> Set of txIds we already sent
+
+function startAddressMonitor() {
+    if (addressPollTimer) return;
+    addressPollTimer = setInterval(pollWatchedAddresses, ADDRESS_POLL_INTERVAL);
+    console.log('[addr-monitor] Started');
+}
+
+function stopAddressMonitor() {
+    if (addressPollTimer) { clearInterval(addressPollTimer); addressPollTimer = null; }
+}
+
+function getAllWatchedAddresses() {
+    const all = new Set();
+    for (const [, session] of clients) {
+        for (const addr of session.addresses) all.add(addr);
+    }
+    return all;
+}
+
+async function pollWatchedAddresses() {
+    const addresses = getAllWatchedAddresses();
+    if (addresses.size === 0) return;
+
+    for (const addr of addresses) {
+        try {
+            const txs = await fetchAddressTxs(addr);
+            if (!txs || !txs.length) continue;
+
+            if (!lastSeenTxIds.has(addr)) { lastSeenTxIds.set(addr, new Set()); txs.forEach(function(t) { if (t.transaction_id) lastSeenTxIds.get(addr).add(t.transaction_id); }); continue; }
+            const seen = lastSeenTxIds.get(addr);
+
+            for (const tx of txs.slice(0, 5)) { // Check 5 most recent
+                const txId = tx.transaction_id;
+                if (seen.has(txId)) continue;
+                seen.add(txId);
+
+                // Keep seen set bounded
+                if (seen.size > 100) {
+                    const iter = seen.values();
+                    for (let i = 0; i < 50; i++) seen.delete(iter.next().value);
+                }
+
+                // Calculate amounts
+                let incoming = 0, outgoing = 0;
+                if (tx.outputs) {
+                    for (const out of tx.outputs) {
+                        if (out.script_public_key_address === addr) incoming += parseInt(out.amount || '0');
+                    }
+                }
+                if (tx.inputs) {
+                    for (const inp of tx.inputs) {
+                        if (inp.previous_outpoint_address === addr) outgoing += parseInt(inp.previous_outpoint_amount || '0');
+                    }
+                }
+
+                if (incoming === 0 && outgoing === 0) continue;
+
+                const match = {
+                    address: addr,
+                    incoming,
+                    outgoing,
+                    incomingKAS: incoming / 1e8,
+                    outgoingKAS: outgoing / 1e8,
+                    direction: incoming > 0 && outgoing > 0 ? 'both' : incoming > 0 ? 'incoming' : 'outgoing',
+                    txId
+                };
+
+                // Send to clients watching this address
+                for (const [ws, session] of clients) {
+                    if (ws.readyState !== WebSocket.OPEN) continue;
+                    if (!session.addresses.has(addr)) continue;
+                    try {
+                        ws.send(JSON.stringify({
+                            type: 'addressAlert',
+                            match,
+                            blockHash: tx.block_hash ? tx.block_hash[0] : null
+                        }));
+                    } catch {}
+                }
+            }
+        } catch (err) {
+            // API error, skip this cycle
+        }
+    }
+}
+
+function fetchAddressTxs(addr) {
+    return new Promise((resolve, reject) => {
+        const url = `${KASPA_API}/addresses/${addr}/full-transactions?limit=5&resolve_previous_outpoints=light`;
+        https.get(url, { timeout: 5000 }, (res) => {
+            let data = '';
+            res.on('data', c => data += c);
+            res.on('end', () => {
+                try { resolve(JSON.parse(data)); }
+                catch { resolve(null); }
+            });
+        }).on('error', () => resolve(null));
+    });
+}
+
+// =============================================
 // Start
 // =============================================
 
@@ -377,6 +486,7 @@ httpServer.listen(RELAY_PORT, () => {
  ============================================
     `);
     connectToKaspad();
+    startAddressMonitor();
 });
 
 process.on('SIGTERM', () => { stopPolling(); if (kaspadWs) kaspadWs.close(); wss.close(); httpServer.close(); process.exit(0); });
