@@ -180,7 +180,7 @@ async function processFetchQueue() {
                 for (const ph of block.parentHashes) {
                     if (!knownBlocks.has(ph) && fetchQueue.indexOf(ph) === -1) {
                         fetchQueue.push(ph);
-                        if (fetchQueue.length > 100) break;
+                        if (fetchQueue.length > 20) break;
                     }
                 }
             }
@@ -367,7 +367,7 @@ wss.on('connection', (ws, req) => {
 
 const https = require('https');
 const KASPA_API = 'https://api.kaspa.org';
-const ADDRESS_POLL_INTERVAL = 2000; // Poll watched addresses every 2s
+const ADDRESS_POLL_INTERVAL = 5000; // Poll watched addresses every 2s
 let addressPollTimer = null;
 const lastSeenTxIds = new Map(); // address -> Set of txIds we already sent
 
@@ -393,7 +393,7 @@ async function pollWatchedAddresses() {
     const addresses = getAllWatchedAddresses();
     if (addresses.size === 0) return;
 
-    for (const addr of addresses) {
+    var addrArr = Array.from(addresses).slice(0, 5); for (const addr of addrArr) {
         try {
             const txs = await fetchAddressTxs(addr);
             if (!txs || !txs.length) continue;
