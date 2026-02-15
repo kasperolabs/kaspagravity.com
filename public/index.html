@@ -258,12 +258,12 @@ function daaToPosition(daaScore, indexInDaa) {
     var daaOffset = daaScore - state.daaMin;
     var z = daaOffset * CONFIG.zScale;
     var helixAngle = daaOffset * 0.06;
-    var helixRadius = 3.0;
+    var helixRadius = 4.0;
     var cx = Math.cos(helixAngle) * helixRadius;
     var cy = Math.sin(helixAngle) * helixRadius;
     if (indexInDaa === 0) return new THREE.Vector3(cx, cy, z);
     var spreadAngle = helixAngle + indexInDaa * 2.399;
-    var spreadRadius = 0.8 + indexInDaa * 0.4;
+    var spreadRadius = 1.0 + indexInDaa * 0.5;
     var x = cx + Math.cos(spreadAngle) * spreadRadius;
     var y = cy + Math.sin(spreadAngle) * spreadRadius;
     return new THREE.Vector3(x, y, z);

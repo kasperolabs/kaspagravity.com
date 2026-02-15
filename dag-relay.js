@@ -56,6 +56,8 @@ let blockCount = 0;
 let fetchQueue = [];
 let fetching = false;
 let polling = false;
+let lastSuccessfulPoll = Date.now();
+setInterval(function() { if (Date.now() - lastSuccessfulPoll > 15000 && kaspadConnected) { console.log("[watchdog] No successful poll in 15s, reconnecting..."); try { kaspadWs.close(); } catch(e) {} } }, 5000);
 
 // =============================================
 // kaspad wRPC JSON connection
@@ -131,18 +133,18 @@ function stopPolling() {
 }
 
 async function pollForNewBlocks() {
-    if (polling || !kaspadConnected) return;
+    if (polling || !kaspadConnected || pendingRpc.size > 5) return;
     polling = true;
     try {
         const info = await rpc('getBlockDagInfo', {});
-        dagInfo = info;
+        dagInfo = info; lastSuccessfulPoll = Date.now();
         const tips = info.tipHashes || [];
         for (const tip of tips) {
             if (!knownBlocks.has(tip) && fetchQueue.indexOf(tip) === -1) {
                 fetchQueue.push(tip);
             }
         }
-        if (fetchQueue.length > 0) processFetchQueue();
+        fetchQueue = fetchQueue.slice(-80); if (fetchQueue.length > 0) processFetchQueue();
     } catch (err) {
         if (!err.message.includes('timeout')) console.error('[poll] Error:', err.message);
     }
@@ -175,17 +177,14 @@ async function processFetchQueue() {
             if (blockBuffer.length > BLOCK_BUFFER_SIZE) blockBuffer.shift();
             blockCount++;
 
-            // Queue unseen parents (catch blocks between polls)
+            broadcastBlock(block);
+
+            // Shallow parent fetch - one level only, no recursion
             if (block.parentHashes) {
-                for (const ph of block.parentHashes) {
-                    if (!knownBlocks.has(ph) && fetchQueue.indexOf(ph) === -1) {
-                        fetchQueue.push(ph);
-                        if (fetchQueue.length > 20) break;
-                    }
+                for (const ph of block.parentHashes.slice(0, 3)) {
+                    if (!knownBlocks.has(ph) && fetchQueue.length < 80) fetchQueue.push(ph);
                 }
             }
-
-            broadcastBlock(block);
 
             if (blockCount % 100 === 0) {
                 console.log(`[relay] ${blockCount} blocks, ${clients.size} clients, buf=${blockBuffer.length}, q=${fetchQueue.length}`);
@@ -195,7 +194,6 @@ async function processFetchQueue() {
 
     fetching = false;
 }
-
 // =============================================
 // Block parsing
 // =============================================
