@@ -70,14 +70,21 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg-v
 #btn-clear-all { background: none; border: 1px solid rgba(255,68,102,0.3); color: var(--outgoing-red); border-radius: 5px; padding: 5px 10px; font-family: var(--font-mono); font-size: 10px; cursor: pointer; margin-top: 8px; transition: all 0.15s; }
 #btn-clear-all:hover { background: rgba(255,68,102,0.1); }
 .legend-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); }
+#legend-content { overflow: hidden; transition: max-height 0.25s ease, opacity 0.2s ease; max-height: 200px; opacity: 1; }
+#legend-content.collapsed { max-height: 0; opacity: 0; margin: 0; }
+#legend-content .legend-row:first-child { margin-top: 12px; }
+.legend-arrow { font-size: 9px; color: var(--text-dim); }
+.legend-clickable { cursor: pointer; user-select: none; }
 .legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
 #alerts-feed { position: fixed; bottom: 16px; right: 16px; z-index: 100; width: 360px; max-height: 300px; overflow-y: auto; display: flex; flex-direction: column-reverse; gap: 6px; pointer-events: auto; }
-.alert-item { background: var(--bg-panel); backdrop-filter: blur(16px); border: 1px solid var(--border-dim); border-radius: 8px; padding: 10px 14px; font-family: var(--font-mono); font-size: 10px; animation: alertSlideIn 0.3s ease-out; cursor: pointer; transition: border-color 0.2s; }
+.alert-item { background: var(--bg-panel); backdrop-filter: blur(16px); border: 1px solid var(--border-dim); border-radius: 8px; padding: 10px 14px; font-family: var(--font-mono); font-size: 10px; animation: alertSlideIn 0.3s ease-out; cursor: pointer; transition: border-color 0.2s; position: relative; }
 .alert-item:hover { border-color: var(--border-glow); }
 .alert-item.incoming { border-left: 3px solid var(--incoming-green); }
 .alert-item.outgoing { border-left: 3px solid var(--outgoing-red); }
 .alert-item.both { border-left: 3px solid var(--both-amber); }
-.alert-header { display: flex; justify-content: space-between; margin-bottom: 4px; }
+.alert-close { position: absolute; top: 6px; right: 8px; color: var(--text-dim); cursor: pointer; font-size: 14px; line-height: 1; opacity: 0.4; transition: opacity 0.15s; z-index: 2; }
+.alert-close:hover { opacity: 1; color: var(--outgoing-red); }
+.alert-header { display: flex; justify-content: space-between; margin-bottom: 4px; padding-right: 16px; }
 .alert-direction { font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
 .alert-direction.incoming { color: var(--incoming-green); }
 .alert-direction.outgoing { color: var(--outgoing-red); }
@@ -85,7 +92,11 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg-v
 .alert-time { color: var(--text-dim); }
 .alert-addr { color: var(--text-dim); margin-bottom: 2px; }
 .alert-amount { color: var(--text-primary); }
+.alert-blocks { color: var(--text-dim); margin-top: 3px; font-size: 9px; }
+.alert-blocks { display: inline-flex; align-items: center; gap: 4px; margin-top: 4px; padding: 2px 7px; background: rgba(73,209,204,0.1); border-radius: 4px; font-size: 9px; color: var(--kas-teal); }
 @keyframes alertSlideIn { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }
+@keyframes alertShake { 0%,100% { transform: translateX(0); } 20% { transform: translateX(-3px); } 40% { transform: translateX(3px); } 60% { transform: translateX(-2px); } 80% { transform: translateX(2px); } }
+.alert-shake { animation: alertShake 0.3s ease-out; }
 #camera-controls { position: fixed; bottom: 16px; left: 16px; z-index: 100; display: flex; gap: 6px; pointer-events: auto; }
 .cam-btn { background: var(--bg-panel); backdrop-filter: blur(16px); border: 1px solid var(--border-dim); border-radius: 8px; padding: 8px 14px; font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); cursor: pointer; transition: all 0.15s; }
 .cam-btn:hover { border-color: var(--border-glow); color: var(--text-primary); }
@@ -132,13 +143,17 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg-v
         <div id="watched-list"></div>
         <button id="btn-clear-all" style="display:none;">Clear All</button>
     </div>
-    <div class="panel-section">
-        <div class="panel-title">Legend</div>
+    <div class="panel-section legend-clickable" id="legend-panel">
+        <div class="panel-title" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0;">
+            <span>Legend</span><span class="legend-arrow" id="legend-arrow" style="transition:transform 0.2s;">▼</span>
+        </div>
+        <div id="legend-content">
         <div class="legend-row"><div class="legend-dot" style="background:var(--block-default)"></div> Regular block</div>
         <div class="legend-row"><div class="legend-dot" style="background:var(--chain-blue)"></div> Chain block (selected parent)</div>
         <div class="legend-row"><div class="legend-dot" style="background:var(--incoming-green)"></div> Incoming KAS to watched address</div>
         <div class="legend-row"><div class="legend-dot" style="background:var(--outgoing-red)"></div> Outgoing KAS from watched address</div>
         <div class="legend-row"><div class="legend-dot" style="background:var(--both-amber)"></div> Both incoming &amp; outgoing</div>
+        </div>
     </div>
 </div>
 <div id="alerts-feed"></div>
@@ -164,12 +179,12 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg-v
 // === CONFIG ===
 var CONFIG = {
     wsUrl: (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host,
-    maxVisibleBlocks: 400,
+    maxVisibleBlocks: 600,
     blockSize: 0.25,
     blockSizeMatched: 0.4,
     cameraFollowSpeed: 0.04,
     edgeOpacity: 0.12,
-    maxEdgesPerBlock: 3,
+    maxEdgesPerBlock: 10,
     explorerBase: 'https://explorer.kaspa.org',
     zScale: 0.12,
     daaWindow: 5000
@@ -241,6 +256,7 @@ var raycaster = new THREE.Raycaster();
 var materials = {
     def: new THREE.MeshPhongMaterial({ color: 0x49d1cc, emissive: 0x1a4a48, emissiveIntensity: 0.3, shininess: 60, transparent: true, opacity: 0.85 }),
     chain: new THREE.MeshPhongMaterial({ color: 0x4488ff, emissive: 0x1a2a66, emissiveIntensity: 0.4, shininess: 80, transparent: true, opacity: 0.9 }),
+    detected: new THREE.MeshPhongMaterial({ color: 0x80eeee, emissive: 0x2a6a68, emissiveIntensity: 0.5, shininess: 80 }),
     inc: new THREE.MeshPhongMaterial({ color: 0x00ff88, emissive: 0x00aa44, emissiveIntensity: 0.6, shininess: 100 }),
     out: new THREE.MeshPhongMaterial({ color: 0xff4466, emissive: 0xaa2233, emissiveIntensity: 0.6, shininess: 100 }),
     both: new THREE.MeshPhongMaterial({ color: 0xffaa00, emissive: 0xaa6600, emissiveIntensity: 0.6, shininess: 100 }),
@@ -249,6 +265,8 @@ var materials = {
 
 var geoBlock = new THREE.IcosahedronGeometry(CONFIG.blockSize, 1);
 var geoMatched = new THREE.IcosahedronGeometry(CONFIG.blockSizeMatched, 2);
+var geoStub = new THREE.IcosahedronGeometry(CONFIG.blockSize * 0.6, 0);
+var matStub = new THREE.MeshPhongMaterial({ color: 0x49d1cc, emissive: 0x0a2a28, emissiveIntensity: 0.2, shininess: 30, transparent: true, opacity: 0.35 });
 
 // Track blocks per DAA for spread
 var blocksPerDaa = new Map();
@@ -263,7 +281,7 @@ function daaToPosition(daaScore, indexInDaa) {
     var cy = Math.sin(helixAngle) * helixRadius;
     if (indexInDaa === 0) return new THREE.Vector3(cx, cy, z);
     var spreadAngle = helixAngle + indexInDaa * 2.399;
-    var spreadRadius = 1.0 + indexInDaa * 0.5;
+    var spreadRadius = 1.8 + indexInDaa * 0.7;
     var x = cx + Math.cos(spreadAngle) * spreadRadius;
     var y = cy + Math.sin(spreadAngle) * spreadRadius;
     return new THREE.Vector3(x, y, z);
@@ -279,7 +297,36 @@ function getBlockIndexInDaa(daaScore) {
 function addBlockToScene(block, matchInfo) {
     try {
         if (!block || !block.hash) return;
-        if (state.blockMeshes.has(block.hash)) return;
+
+        // If block already exists but now has a match, upgrade it
+        if (state.blockMeshes.has(block.hash)) {
+            if (matchInfo) {
+                var existingMesh = state.blockMeshes.get(block.hash);
+                var newMat;
+                if (matchInfo.direction === 'incoming') { newMat = materials.inc; }
+                else if (matchInfo.direction === 'outgoing') { newMat = materials.out; }
+                else if (matchInfo.direction === 'both') { newMat = materials.both; }
+                else { newMat = materials.inc; } // default to green for detected
+                existingMesh.material = newMat;
+                existingMesh.userData.originalMaterial = newMat;
+                existingMesh.userData.matchInfo = matchInfo;
+                // Switch to larger geometry
+                if (existingMesh.geometry !== geoMatched) {
+                    existingMesh.geometry.dispose();
+                    existingMesh.geometry = geoMatched;
+                }
+                // Add glow if not already there
+                if (existingMesh.children.length === 0) {
+                    var gc = matchInfo.direction === 'incoming' ? 0x00ff88 : matchInfo.direction === 'outgoing' ? 0xff4466 : matchInfo.direction === 'both' ? 0xffaa00 : 0x00ff88;
+                    var gm = new THREE.Mesh(
+                        new THREE.IcosahedronGeometry(CONFIG.blockSizeMatched * 2.5, 1),
+                        new THREE.MeshBasicMaterial({ color: gc, transparent: true, opacity: 0.15, side: THREE.BackSide })
+                    );
+                    existingMesh.add(gm);
+                }
+            }
+            return;
+        }
 
         // Update DAA range
         if (state.daaMin === Infinity) state.daaMin = block.daaScore;
@@ -290,7 +337,10 @@ function addBlockToScene(block, matchInfo) {
 
         var mat, geo;
         if (matchInfo) {
-            mat = matchInfo.direction === 'incoming' ? materials.inc : matchInfo.direction === 'outgoing' ? materials.out : materials.both;
+            if (matchInfo.direction === 'incoming') { mat = materials.inc; }
+            else if (matchInfo.direction === 'outgoing') { mat = materials.out; }
+            else if (matchInfo.direction === 'both') { mat = materials.both; }
+            else { mat = materials.detected; } // 'detected' from block-level (no direction known yet)
             geo = geoMatched;
         } else {
             mat = materials.def;
@@ -320,7 +370,7 @@ function addBlockToScene(block, matchInfo) {
 
         // Glow for matched
         if (matchInfo) {
-            var gc = matchInfo.direction === 'incoming' ? 0x00ff88 : matchInfo.direction === 'outgoing' ? 0xff4466 : 0xffaa00;
+            var gc = matchInfo.direction === 'incoming' ? 0x00ff88 : matchInfo.direction === 'outgoing' ? 0xff4466 : matchInfo.direction === 'both' ? 0xffaa00 : 0x80eeee;
             var gm = new THREE.Mesh(
                 new THREE.IcosahedronGeometry(CONFIG.blockSizeMatched * 2.5, 1),
                 new THREE.MeshBasicMaterial({ color: gc, transparent: true, opacity: 0.15, side: THREE.BackSide })
@@ -334,6 +384,87 @@ function addBlockToScene(block, matchInfo) {
         if (state.bpsCounter.count % 50 === 0) pruneOldBlocks();
     } catch(err) {
         console.error('[addBlock]', err.message);
+    }
+}
+
+// Recolor a block when REST API confirms real direction
+function recolorBlock(blockHash, direction) {
+    var mesh = state.blockMeshes.get(blockHash);
+    if (!mesh) return;
+    var newMat;
+    var glowColor;
+    if (direction === 'incoming') { newMat = materials.inc; glowColor = 0x00ff88; }
+    else if (direction === 'outgoing') { newMat = materials.out; glowColor = 0xff4466; }
+    else if (direction === 'both') { newMat = materials.both; glowColor = 0xffaa00; }
+    else return;
+    mesh.material = newMat;
+    mesh.userData.originalMaterial = newMat;
+    mesh.userData.matchInfo = { direction: direction };
+    // Update glow if present, or add one
+    var oldGlow = null;
+    mesh.children.forEach(function(c) { oldGlow = c; });
+    if (oldGlow) {
+        mesh.remove(oldGlow);
+        if (oldGlow.geometry) oldGlow.geometry.dispose();
+        if (oldGlow.material) oldGlow.material.dispose();
+    }
+    var gm = new THREE.Mesh(
+        new THREE.IcosahedronGeometry(CONFIG.blockSizeMatched * 2.5, 1),
+        new THREE.MeshBasicMaterial({ color: glowColor, transparent: true, opacity: 0.15, side: THREE.BackSide })
+    );
+    mesh.add(gm);
+    // Switch to matched geometry if not already
+    if (mesh.geometry !== geoMatched) {
+        mesh.geometry.dispose();
+        mesh.geometry = geoMatched;
+    }
+}
+
+// === STUB: placeholder parent block (dimmer, smaller) ===
+function addStubToScene(hash, estimatedDaa) {
+    if (state.blockMeshes.has(hash)) return;
+    if (state.daaMin === Infinity) state.daaMin = estimatedDaa;
+
+    var idx = getBlockIndexInDaa(estimatedDaa);
+    var pos = daaToPosition(estimatedDaa, idx);
+
+    var mesh = new THREE.Mesh(geoStub, matStub);
+    mesh.position.copy(pos);
+    mesh.userData = { block: { hash: hash, daaScore: estimatedDaa }, matchInfo: null, originalMaterial: matStub, idx: idx, isStub: true };
+    scene.add(mesh);
+    state.blockMeshes.set(hash, mesh);
+    state.blocks.set(hash, { hash: hash, daaScore: estimatedDaa, position: pos, parentHashes: [], txCount: 0, blueScore: 0, timestamp: 0 });
+}
+
+// === UPGRADE: stub becomes full block ===
+function upgradeStub(block) {
+    if (!block || !block.hash) return;
+    var mesh = state.blockMeshes.get(block.hash);
+    if (mesh && mesh.userData.isStub) {
+        // Upgrade geometry + material
+        mesh.geometry = geoBlock;
+        mesh.material = materials.def;
+        mesh.userData.originalMaterial = materials.def;
+        mesh.userData.block = block;
+        mesh.userData.isStub = false;
+        // Update block data
+        state.blocks.set(block.hash, { hash: block.hash, daaScore: block.daaScore, position: mesh.position.clone(), parentHashes: block.parentHashes, txCount: block.txCount, blueScore: block.blueScore, timestamp: block.timestamp });
+        // Draw edges to parents if they exist
+        if (block.parentHashes) {
+            var parents = block.parentHashes.slice(0, CONFIG.maxEdgesPerBlock);
+            for (var i = 0; i < parents.length; i++) {
+                var pd = state.blocks.get(parents[i]);
+                if (!pd) continue;
+                var lg = new THREE.BufferGeometry().setFromPoints([mesh.position, pd.position]);
+                var lm = new THREE.LineBasicMaterial({ color: 0x49d1cc, transparent: true, opacity: CONFIG.edgeOpacity });
+                var line = new THREE.Line(lg, lm);
+                scene.add(line);
+                state.edgeLines.push(line);
+            }
+        }
+    } else if (!mesh) {
+        // Never seen this hash — add as full block
+        addBlockToScene(block, null);
     }
 }
 
@@ -394,14 +525,19 @@ function updateCamera(dt) {
     var maxZ = 0;
     state.blockMeshes.forEach(function(m) { if (m.position.z > maxZ) maxZ = m.position.z; });
     if (state.cameraMode === "follow") {
-        var tp = new THREE.Vector3(6, 3, maxZ - 8);
+        var tp = new THREE.Vector3(10, 5, maxZ - 14);
         camera.position.lerp(tp, CONFIG.cameraFollowSpeed);
         cameraTarget.lerp(new THREE.Vector3(0, 0, maxZ + 5), CONFIG.cameraFollowSpeed);
         camera.lookAt(cameraTarget);
     } else if (state.cameraMode === "orbit") {
-        orbitAngle += dt * 0.2;
-        camera.position.set(Math.cos(orbitAngle) * 12, 4 + Math.sin(orbitAngle * 0.3) * 2, maxZ + Math.sin(orbitAngle * 0.5) * 6);
-        cameraTarget.set(0, 0, maxZ);
+        orbitAngle += dt * 0.15;
+        var orbitTarget = new THREE.Vector3(
+            Math.cos(orbitAngle) * 14,
+            5 + Math.sin(orbitAngle * 0.3) * 2,
+            maxZ + Math.sin(orbitAngle * 0.5) * 6
+        );
+        camera.position.lerp(orbitTarget, 0.03);
+        cameraTarget.lerp(new THREE.Vector3(0, 0, maxZ), 0.03);
         camera.lookAt(cameraTarget);
     }
     pointLight.position.copy(camera.position);
@@ -464,17 +600,30 @@ function checkHover() {
 }
 
 // === UI: ADDRESSES ===
+function saveAddressesToStorage() {
+    try { localStorage.setItem('kaspa_gravity_addresses', JSON.stringify(Array.from(state.watchedAddresses))); } catch(e) {}
+}
+function loadAddressesFromStorage() {
+    try {
+        var saved = localStorage.getItem('kaspa_gravity_addresses');
+        if (saved) {
+            var addrs = JSON.parse(saved);
+            if (Array.isArray(addrs)) addrs.forEach(function(a) { if (typeof a === 'string' && a.startsWith('kaspa:')) state.watchedAddresses.add(a); });
+        }
+    } catch(e) {}
+}
 function addWatchedAddress(addr) {
     addr = addr.trim();
     if (!addr.startsWith('kaspa:') || addr.length < 30) { document.getElementById('address-input').style.borderColor = 'var(--outgoing-red)'; setTimeout(function() { document.getElementById('address-input').style.borderColor = ''; }, 1000); return; }
     if (state.watchedAddresses.has(addr)) return;
     state.watchedAddresses.add(addr);
+    saveAddressesToStorage();
     syncAddresses();
     renderWatched();
     document.getElementById('address-input').value = '';
 }
-function removeAddr(addr) { state.watchedAddresses.delete(addr); syncAddresses(); renderWatched(); }
-function clearAll() { state.watchedAddresses.clear(); if (state.ws && state.ws.readyState === WebSocket.OPEN) state.ws.send(JSON.stringify({ type: 'unwatchAll' })); renderWatched(); }
+function removeAddr(addr) { state.watchedAddresses.delete(addr); saveAddressesToStorage(); syncAddresses(); renderWatched(); }
+function clearAll() { state.watchedAddresses.clear(); saveAddressesToStorage(); if (state.ws && state.ws.readyState === WebSocket.OPEN) state.ws.send(JSON.stringify({ type: 'unwatchAll' })); renderWatched(); }
 function syncAddresses() { if (state.ws && state.ws.readyState === WebSocket.OPEN) state.ws.send(JSON.stringify({ type: 'watchAddresses', addresses: Array.from(state.watchedAddresses) })); }
 function renderWatched() {
     var list = document.getElementById('watched-list');
@@ -490,19 +639,59 @@ function renderWatched() {
 }
 
 // === UI: ALERTS ===
+var alertCards = new Map(); // key: txId -> { element, blockCount, ... }
+
 function addAlert(matchInfo, block) {
     var feed = document.getElementById('alerts-feed');
-    var div = document.createElement('div');
-    div.className = 'alert-item ' + matchInfo.direction;
-    var time = new Date().toLocaleTimeString();
+    var txId = matchInfo.txId || (block.hash + '_' + matchInfo.address); // fallback key for block-level
+
+    var existing = alertCards.get(txId);
+    if (existing) {
+        existing.blockCount++;
+        existing.element.querySelector('.alert-blocks').textContent = '\u29C8 ' + existing.blockCount + ' blocks';
+        existing.element.classList.remove('alert-shake');
+        void existing.element.offsetWidth;
+        existing.element.classList.add('alert-shake');
+        return;
+    }
+
+    var direction = matchInfo.direction || 'incoming';
     var sa = matchInfo.address.substring(0, 16) + '...' + matchInfo.address.slice(-8);
     var amt = '';
     if (matchInfo.incomingKAS > 0) amt += '<span style="color:var(--incoming-green)">+' + matchInfo.incomingKAS.toFixed(4) + ' KAS</span>';
     if (matchInfo.outgoingKAS > 0) { if (amt) amt += ' / '; amt += '<span style="color:var(--outgoing-red)">-' + matchInfo.outgoingKAS.toFixed(4) + ' KAS</span>'; }
-    div.innerHTML = '<div class="alert-header"><span class="alert-direction ' + matchInfo.direction + '">' + matchInfo.direction.toUpperCase() + '</span><span class="alert-time">' + time + '</span></div><div class="alert-addr">' + sa + '</div><div class="alert-amount">' + amt + '</div>';
-    div.addEventListener('click', function() { window.open(state.explorerBase + '/blocks/' + block.hash, '_blank'); });
+    var time = new Date().toLocaleTimeString();
+
+    var div = document.createElement('div');
+    div.className = 'alert-item ' + direction;
+    div.innerHTML = '<div class="alert-header"><span class="alert-direction ' + direction + '">' + direction.toUpperCase() + '</span><span class="alert-time">' + time + '</span></div><div class="alert-addr">' + sa + '</div><div class="alert-amount">' + amt + '</div><div class="alert-blocks">\u29C8 1 block</div>';
+
+    var closeBtn = document.createElement('span');
+    closeBtn.className = 'alert-close';
+    closeBtn.innerHTML = '&times;';
+    closeBtn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        alertCards.delete(txId);
+        div.remove();
+    });
+    div.appendChild(closeBtn);
+
+    div.addEventListener('click', function() {
+        window.open(state.explorerBase + '/blocks/' + block.hash, '_blank');
+    });
+
+    var card = { element: div, blockCount: 1 };
+    alertCards.set(txId, card);
     feed.prepend(div);
-    while (feed.children.length > 30) feed.removeChild(feed.lastChild);
+
+    // Cap at 30 cards
+    while (feed.children.length > 30) {
+        var oldest = feed.lastChild;
+        if (oldest) {
+            alertCards.forEach(function(c, k) { if (c.element === oldest) alertCards.delete(k); });
+            oldest.remove();
+        }
+    }
 }
 
 // === STATS ===
@@ -557,9 +746,25 @@ function handleRelayMessage(msg) {
             break;
         case 'block':
             addBlockToScene(msg.block, msg.matches && msg.matches.length > 0 ? msg.matches[0] : null);
-            if (msg.matches) { for (var j = 0; j < msg.matches.length; j++) addAlert(msg.matches[j], msg.block); }
             break;
-        case 'watchConfirm': break; case 'addressAlert': if (msg.match) { addAlert(msg.match, { hash: msg.blockHash || 'unknown', daaScore: state.latestDaa }); } break;
+        case 'blockStub':
+            // Placeholder parent — draw a dim small node so edges can connect
+            if (msg.hash && !state.blockMeshes.has(msg.hash)) {
+                addStubToScene(msg.hash, msg.estimatedDaa || state.latestDaa - 1);
+            }
+            break;
+        case 'blockFill':
+            // Lazy-loaded parent data arrived — upgrade stub to full block
+            if (msg.block) {
+                upgradeStub(msg.block);
+            }
+            break;
+        case 'watchConfirm': break;
+        case 'addressAlert':
+            if (msg.match) {
+                addAlert(msg.match, { hash: msg.blockHash || 'unknown', daaScore: state.latestDaa });
+            }
+            break;
         case 'pong': break;
     }
 }
@@ -602,6 +807,12 @@ renderer.domElement.addEventListener('click', onClick);
 document.getElementById('btn-add-address').addEventListener('click', function() { addWatchedAddress(document.getElementById('address-input').value); });
 document.getElementById('address-input').addEventListener('keydown', function(e) { if (e.key === 'Enter') addWatchedAddress(e.target.value); });
 document.getElementById('btn-clear-all').addEventListener('click', clearAll);
+document.getElementById('legend-panel').addEventListener('click', function() {
+    var content = document.getElementById('legend-content');
+    var arrow = document.getElementById('legend-arrow');
+    content.classList.toggle('collapsed');
+    arrow.style.transform = content.classList.contains('collapsed') ? 'rotate(-90deg)' : 'rotate(0deg)';
+});
 document.querySelectorAll('.cam-btn').forEach(function(btn) {
     btn.addEventListener('click', function() {
         document.querySelectorAll('.cam-btn').forEach(function(b) { b.classList.remove('active'); });
@@ -612,6 +823,8 @@ document.querySelectorAll('.cam-btn').forEach(function(btn) {
 setInterval(function() { if (state.ws && state.ws.readyState === WebSocket.OPEN) state.ws.send(JSON.stringify({ type: 'ping' })); }, 30000);
 
 // === INIT ===
+loadAddressesFromStorage();
+renderWatched();
 animate();
 connectRelay();
 

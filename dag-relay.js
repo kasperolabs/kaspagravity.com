@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 /**
- * Kaspa Gravity - DAG Relay Server (Polling Mode)
- * 
- * Connects to kaspad wRPC JSON (port 18110) and polls for new blocks.
- * Relays real-time block data to browser clients via WebSocket.
- * 
+ * Kaspa Gravity - DAG Relay Server v2 (Lazy Parent Architecture)
+ *
+ * Tip blocks arrive instantly from kaspad polling.
+ * Parent blocks are lazily fetched in the background — one at a time,
+ * never blocking the main poll loop.
+ *
  * Usage:   node dag-relay.js
- * 
+ *
  * .env:
  *   KASPAD_WS_URL  - kaspad wRPC JSON endpoint
  *   RELAY_PORT     - port for browser clients (default: 8765)
@@ -16,6 +17,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const WebSocket = require('ws');
+const https = require('https');
 
 // Load .env file if present
 const envPath = path.join(__dirname, '.env');
@@ -39,6 +41,9 @@ const RECONNECT_DELAY = 3000;
 const RPC_TIMEOUT = 8000;
 const POLL_INTERVAL = 50;
 const EXPLORER_BASE = 'https://explorer.kaspa.org';
+const KASPA_API = 'https://api.kaspa.org';
+const ADDRESS_POLL_INTERVAL = 3000;
+const LAZY_FETCH_INTERVAL = 80;
 
 // =============================================
 // State
@@ -51,13 +56,30 @@ const blockBuffer = [];
 const clients = new Map();
 let dagInfo = null;
 let knownBlocks = new Set();
+let knownStubs = new Set();
 let pollTimer = null;
 let blockCount = 0;
-let fetchQueue = [];
-let fetching = false;
 let polling = false;
 let lastSuccessfulPoll = Date.now();
-setInterval(function() { if (Date.now() - lastSuccessfulPoll > 15000 && kaspadConnected) { console.log("[watchdog] No successful poll in 15s, reconnecting..."); try { kaspadWs.close(); } catch(e) {} } }, 5000);
+
+// Lazy fetch queue for parent blocks
+const lazyQueue = [];
+let lazyTimer = null;
+let lazyFetching = false;
+
+// Address monitor
+let addressPollTimer = null;
+let addressPolling = false;
+const lastSeenTxIds = new Map();
+
+// Watchdog
+setInterval(function() {
+    if (Date.now() - lastSuccessfulPoll > 15000 && kaspadConnected) {
+        console.log("[watchdog] No successful poll in 15s, reconnecting...");
+        try { kaspadWs.close(); } catch(e) {}
+    }
+    if (polling && pendingRpc.size === 0) polling = false;
+}, 5000);
 
 // =============================================
 // kaspad wRPC JSON connection
@@ -66,7 +88,7 @@ setInterval(function() { if (Date.now() - lastSuccessfulPoll > 15000 && kaspadCo
 function connectToKaspad() {
     console.log(`[kaspad] Connecting to ${KASPAD_URL}...`);
     if (kaspadWs) { try { kaspadWs.close(); } catch {} }
-    
+
     kaspadWs = new WebSocket(KASPAD_URL);
 
     kaspadWs.on('open', async () => {
@@ -77,6 +99,7 @@ function connectToKaspad() {
             console.log(`[kaspad] DAG synced. virtualDaaScore=${dagInfo.virtualDaaScore}, tips=${dagInfo.tipHashes?.length}`);
             if (dagInfo.tipHashes) dagInfo.tipHashes.forEach(h => knownBlocks.add(h));
             startPolling();
+            startLazyFetcher();
             broadcast({ type: 'status', connected: true, dagInfo: sanitizeDagInfo(dagInfo) });
         } catch (err) {
             console.error('[kaspad] Init error:', err.message);
@@ -99,6 +122,7 @@ function connectToKaspad() {
         kaspadConnected = false;
         console.log('[kaspad] Disconnected, reconnecting...');
         stopPolling();
+        stopLazyFetcher();
         for (const [id, p] of pendingRpc) { clearTimeout(p.timer); p.reject(new Error('Connection lost')); }
         pendingRpc.clear();
         broadcast({ type: 'status', connected: false });
@@ -119,7 +143,7 @@ function rpc(method, params) {
 }
 
 // =============================================
-// Polling for new blocks
+// Tip Polling (fast, never blocks)
 // =============================================
 
 function startPolling() {
@@ -133,67 +157,126 @@ function stopPolling() {
 }
 
 async function pollForNewBlocks() {
-    if (polling || !kaspadConnected || pendingRpc.size > 5) return;
+    if (polling || !kaspadConnected) return;
     polling = true;
     try {
         const info = await rpc('getBlockDagInfo', {});
-        dagInfo = info; lastSuccessfulPoll = Date.now();
+        dagInfo = info;
+        lastSuccessfulPoll = Date.now();
         const tips = info.tipHashes || [];
+
+        // Collect new tips first, then fetch — don't interleave with lazy
+        const newTips = [];
         for (const tip of tips) {
-            if (!knownBlocks.has(tip) && fetchQueue.indexOf(tip) === -1) {
-                fetchQueue.push(tip);
-            }
+            if (!knownBlocks.has(tip) && !knownStubs.has(tip)) newTips.push(tip);
         }
-        fetchQueue = fetchQueue.slice(-80); if (fetchQueue.length > 0) processFetchQueue();
+
+        for (const tip of newTips) {
+            if (!kaspadConnected) break;
+            try {
+                const result = await rpc('getBlock', { hash: tip, includeTransactions: true });
+                if (!result.block) continue;
+                const block = parseBlock(result.block);
+                if (!block) continue;
+
+                knownBlocks.add(tip);
+                knownStubs.delete(tip);
+
+                blockBuffer.push(block);
+                if (blockBuffer.length > BLOCK_BUFFER_SIZE) blockBuffer.shift();
+                blockCount++;
+
+                broadcastBlock(block);
+
+                // Queue parents for lazy fetch + send stubs
+                if (block.parentHashes) {
+                    for (const ph of block.parentHashes) {
+                        if (!knownBlocks.has(ph) && !knownStubs.has(ph)) {
+                            knownStubs.add(ph);
+                            if (lazyQueue.length < 200) lazyQueue.push(ph);
+                            broadcastStub(ph, block.daaScore - 1);
+                        }
+                    }
+                }
+            } catch (err) { /* skip tip */ }
+        }
+
+        if (blockCount % 100 === 0 && blockCount > 0) {
+            console.log(`[relay] ${blockCount} blocks, ${clients.size} clients, buf=${blockBuffer.length}, lazyQ=${lazyQueue.length}`);
+        }
     } catch (err) {
         if (!err.message.includes('timeout')) console.error('[poll] Error:', err.message);
     }
     polling = false;
 }
 
-async function processFetchQueue() {
-    if (fetching || fetchQueue.length === 0) return;
-    fetching = true;
+// =============================================
+// Lazy Parent Fetcher (background, one at a time)
+// =============================================
 
-    while (fetchQueue.length > 0) {
-        const hash = fetchQueue.shift();
-        if (knownBlocks.has(hash)) continue;
+function startLazyFetcher() {
+    stopLazyFetcher();
+    lazyTimer = setInterval(lazyFetchOne, LAZY_FETCH_INTERVAL);
+}
 
-        try {
-            const result = await rpc('getBlock', { hash, includeTransactions: true });
-            const blockData = result.block;
-            if (!blockData) continue;
+function stopLazyFetcher() {
+    if (lazyTimer) { clearInterval(lazyTimer); lazyTimer = null; }
+}
 
-            knownBlocks.add(hash);
-            if (knownBlocks.size > 5000) {
-                const iter = knownBlocks.values();
-                for (let i = 0; i < 1000; i++) knownBlocks.delete(iter.next().value);
-            }
+async function lazyFetchOne() {
+    // Yield to tip poller — tips always have priority
+    if (lazyFetching || polling || !kaspadConnected || pendingRpc.size > 0) return;
+    if (lazyQueue.length === 0) return;
 
-            const block = parseBlock(blockData);
-            if (!block) continue;
+    lazyFetching = true;
+    const hash = lazyQueue.shift();
 
-            blockBuffer.push(block);
-            if (blockBuffer.length > BLOCK_BUFFER_SIZE) blockBuffer.shift();
-            blockCount++;
+    if (knownBlocks.has(hash)) { lazyFetching = false; return; }
 
-            broadcastBlock(block);
+    try {
+        const result = await rpc('getBlock', { hash, includeTransactions: true });
+        if (result.block) {
+            const block = parseBlock(result.block);
+            if (block) {
+                knownBlocks.add(hash);
+                knownStubs.delete(hash);
 
-            // Shallow parent fetch - one level only, no recursion
-            if (block.parentHashes) {
-                for (const ph of block.parentHashes.slice(0, 3)) {
-                    if (!knownBlocks.has(ph) && fetchQueue.length < 80) fetchQueue.push(ph);
+                blockBuffer.push(block);
+                if (blockBuffer.length > BLOCK_BUFFER_SIZE) blockBuffer.shift();
+                blockCount++;
+
+                broadcastBlockFill(block);
+
+                // Queue this block's parents too
+                if (block.parentHashes) {
+                    for (const ph of block.parentHashes) {
+                        if (!knownBlocks.has(ph) && !knownStubs.has(ph) && lazyQueue.length < 200) {
+                            knownStubs.add(ph);
+                            lazyQueue.push(ph);
+                            broadcastStub(ph, block.daaScore - 1);
+                        }
+                    }
                 }
             }
-
-            if (blockCount % 100 === 0) {
-                console.log(`[relay] ${blockCount} blocks, ${clients.size} clients, buf=${blockBuffer.length}, q=${fetchQueue.length}`);
-            }
-        } catch (err) { /* skip */ }
+        }
+    } catch (err) {
+        if (err.message.includes('timeout') && lazyQueue.length < 200) lazyQueue.push(hash);
     }
-
-    fetching = false;
+    lazyFetching = false;
 }
+
+// Prune memory
+setInterval(function() {
+    if (knownBlocks.size > 5000) {
+        const iter = knownBlocks.values();
+        for (let i = 0; i < 1000; i++) knownBlocks.delete(iter.next().value);
+    }
+    if (knownStubs.size > 3000) {
+        const iter = knownStubs.values();
+        for (let i = 0; i < 1000; i++) knownStubs.delete(iter.next().value);
+    }
+}, 30000);
+
 // =============================================
 // Block parsing
 // =============================================
@@ -274,6 +357,25 @@ function broadcastBlock(block) {
     }
 }
 
+function broadcastBlockFill(block) {
+    const payload = {
+        type: 'blockFill',
+        block: { hash: block.hash, daaScore: block.daaScore, timestamp: block.timestamp, blueScore: block.blueScore, parentHashes: block.parentHashes, txCount: block.txCount }
+    };
+    const data = JSON.stringify(payload);
+    for (const [ws] of clients) {
+        if (ws.readyState === WebSocket.OPEN) { try { ws.send(data); } catch {} }
+    }
+}
+
+function broadcastStub(hash, estimatedDaa) {
+    const payload = { type: 'blockStub', hash: hash, estimatedDaa: estimatedDaa };
+    const data = JSON.stringify(payload);
+    for (const [ws] of clients) {
+        if (ws.readyState === WebSocket.OPEN) { try { ws.send(data); } catch {} }
+    }
+}
+
 function broadcast(msg) {
     const data = JSON.stringify(msg);
     for (const [ws] of clients) {
@@ -295,7 +397,7 @@ const MIME = { '.html':'text/html', '.css':'text/css', '.js':'application/javasc
 const httpServer = http.createServer((req, res) => {
     if (req.url === '/health') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ status: 'ok', kaspadConnected, clients: clients.size, blocksRelayed: blockCount, bufferSize: blockBuffer.length }));
+        return res.end(JSON.stringify({ status: 'ok', kaspadConnected, clients: clients.size, blocksRelayed: blockCount, bufferSize: blockBuffer.length, lazyQueue: lazyQueue.length }));
     }
 
     let filePath = req.url === '/' ? '/index.html' : req.url;
@@ -360,14 +462,8 @@ wss.on('connection', (ws, req) => {
 });
 
 // =============================================
-// Real-time Address Monitoring (Kaspa REST API)
+// Address Monitor (REST API, fully independent)
 // =============================================
-
-const https = require('https');
-const KASPA_API = 'https://api.kaspa.org';
-const ADDRESS_POLL_INTERVAL = 5000; // Poll watched addresses every 2s
-let addressPollTimer = null;
-const lastSeenTxIds = new Map(); // address -> Set of txIds we already sent
 
 function startAddressMonitor() {
     if (addressPollTimer) return;
@@ -388,76 +484,88 @@ function getAllWatchedAddresses() {
 }
 
 async function pollWatchedAddresses() {
-    const addresses = getAllWatchedAddresses();
-    if (addresses.size === 0) return;
+    if (addressPolling) return;
+    addressPolling = true;
 
-    var addrArr = Array.from(addresses).slice(0, 5); for (const addr of addrArr) {
-        try {
-            const txs = await fetchAddressTxs(addr);
-            if (!txs || !txs.length) continue;
+    try {
+        const addresses = getAllWatchedAddresses();
+        if (addresses.size === 0) { addressPolling = false; return; }
 
-            if (!lastSeenTxIds.has(addr)) { lastSeenTxIds.set(addr, new Set()); txs.forEach(function(t) { if (t.transaction_id) lastSeenTxIds.get(addr).add(t.transaction_id); }); continue; }
-            const seen = lastSeenTxIds.get(addr);
+        const addrArr = Array.from(addresses);
+        const idx = Math.floor(Date.now() / ADDRESS_POLL_INTERVAL) % addrArr.length;
+        const addr = addrArr[idx];
 
-            for (const tx of txs.slice(0, 5)) { // Check 5 most recent
-                const txId = tx.transaction_id;
-                if (seen.has(txId)) continue;
-                seen.add(txId);
+        const txs = await fetchAddressTxs(addr);
+        if (!txs || !txs.length) { addressPolling = false; return; }
 
-                // Keep seen set bounded
-                if (seen.size > 100) {
-                    const iter = seen.values();
-                    for (let i = 0; i < 50; i++) seen.delete(iter.next().value);
-                }
+        if (!lastSeenTxIds.has(addr)) {
+            lastSeenTxIds.set(addr, new Set());
+            txs.forEach(t => { if (t.transaction_id) lastSeenTxIds.get(addr).add(t.transaction_id); });
+            addressPolling = false;
+            return;
+        }
+        const seen = lastSeenTxIds.get(addr);
 
-                // Calculate amounts
-                let incoming = 0, outgoing = 0;
-                if (tx.outputs) {
-                    for (const out of tx.outputs) {
-                        if (out.script_public_key_address === addr) incoming += parseInt(out.amount || '0');
-                    }
-                }
-                if (tx.inputs) {
-                    for (const inp of tx.inputs) {
-                        if (inp.previous_outpoint_address === addr) outgoing += parseInt(inp.previous_outpoint_amount || '0');
-                    }
-                }
+        for (const tx of txs.slice(0, 5)) {
+            const txId = tx.transaction_id;
+            if (seen.has(txId)) continue;
+            seen.add(txId);
 
-                if (incoming === 0 && outgoing === 0) continue;
+            if (seen.size > 100) {
+                const iter = seen.values();
+                for (let i = 0; i < 50; i++) seen.delete(iter.next().value);
+            }
 
-                const match = {
-                    address: addr,
-                    incoming,
-                    outgoing,
-                    incomingKAS: incoming / 1e8,
-                    outgoingKAS: outgoing / 1e8,
-                    direction: incoming > 0 && outgoing > 0 ? 'both' : incoming > 0 ? 'incoming' : 'outgoing',
-                    txId
-                };
-
-                // Send to clients watching this address
-                for (const [ws, session] of clients) {
-                    if (ws.readyState !== WebSocket.OPEN) continue;
-                    if (!session.addresses.has(addr)) continue;
-                    try {
-                        ws.send(JSON.stringify({
-                            type: 'addressAlert',
-                            match,
-                            blockHash: tx.block_hash ? tx.block_hash[0] : null
-                        }));
-                    } catch {}
+            let rawIncoming = 0, rawOutgoing = 0;
+            if (tx.outputs) {
+                for (const out of tx.outputs) {
+                    if (out.script_public_key_address === addr) rawIncoming += parseInt(out.amount || '0');
                 }
             }
-        } catch (err) {
-            // API error, skip this cycle
+            if (tx.inputs) {
+                for (const inp of tx.inputs) {
+                    if (inp.previous_outpoint_address === addr) rawOutgoing += parseInt(inp.previous_outpoint_amount || '0');
+                }
+            }
+
+            let incoming = 0, outgoing = 0;
+            if (rawIncoming > 0 && rawOutgoing > 0) {
+                const net = rawIncoming - rawOutgoing;
+                if (net > 0) incoming = net;
+                else if (net < 0) outgoing = Math.abs(net);
+                else continue;
+            } else {
+                incoming = rawIncoming;
+                outgoing = rawOutgoing;
+            }
+
+            if (incoming === 0 && outgoing === 0) continue;
+
+            const match = {
+                address: addr,
+                incoming, outgoing,
+                incomingKAS: incoming / 1e8,
+                outgoingKAS: outgoing / 1e8,
+                direction: incoming > 0 && outgoing > 0 ? 'both' : incoming > 0 ? 'incoming' : 'outgoing',
+                txId
+            };
+
+            for (const [ws, session] of clients) {
+                if (ws.readyState !== WebSocket.OPEN) continue;
+                if (!session.addresses.has(addr)) continue;
+                try {
+                    ws.send(JSON.stringify({ type: 'addressAlert', match, blockHash: tx.block_hash ? tx.block_hash[0] : null }));
+                } catch {}
+            }
         }
-    }
+    } catch (err) { /* skip */ }
+    addressPolling = false;
 }
 
 function fetchAddressTxs(addr) {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
         const url = `${KASPA_API}/addresses/${addr}/full-transactions?limit=5&resolve_previous_outpoints=light`;
-        https.get(url, { timeout: 5000 }, (res) => {
+        https.get(url, { timeout: 3000 }, (res) => {
             let data = '';
             res.on('data', c => data += c);
             res.on('end', () => {
@@ -475,17 +583,18 @@ function fetchAddressTxs(addr) {
 httpServer.listen(RELAY_PORT, () => {
     console.log(`
  ============================================
-   Kaspa Gravity - DAG Relay Server
+   Kaspa Gravity - DAG Relay v2
  ============================================
    Relay:   http://0.0.0.0:${RELAY_PORT}
    kaspad:  ${KASPAD_URL}
    Static:  ${STATIC_DIR}
-   Mode:    Polling (${POLL_INTERVAL}ms)
+   Tip Poll:    ${POLL_INTERVAL}ms
+   Parent Fill: ${LAZY_FETCH_INTERVAL}ms
  ============================================
     `);
     connectToKaspad();
     startAddressMonitor();
 });
 
-process.on('SIGTERM', () => { stopPolling(); if (kaspadWs) kaspadWs.close(); wss.close(); httpServer.close(); process.exit(0); });
-process.on('SIGINT', () => { stopPolling(); if (kaspadWs) kaspadWs.close(); wss.close(); httpServer.close(); process.exit(0); });
+process.on('SIGTERM', () => { stopPolling(); stopLazyFetcher(); if (kaspadWs) kaspadWs.close(); wss.close(); httpServer.close(); process.exit(0); });
+process.on('SIGINT', () => { stopPolling(); stopLazyFetcher(); if (kaspadWs) kaspadWs.close(); wss.close(); httpServer.close(); process.exit(0); });
