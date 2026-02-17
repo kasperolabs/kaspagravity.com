@@ -145,7 +145,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg-v
     </div>
     <div class="panel-section legend-clickable" id="legend-panel">
         <div class="panel-title" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0;">
-            <span>Legend</span><span class="legend-arrow" id="legend-arrow" style="transition:transform 0.2s;">▼</span>
+            <span>Legend</span><span class="legend-arrow" id="legend-arrow" style="transition:transform 0.2s;">â–¼</span>
         </div>
         <div id="legend-content">
         <div class="legend-row"><div class="legend-dot" style="background:var(--block-default)"></div> Regular block</div>
@@ -463,7 +463,7 @@ function upgradeStub(block) {
             }
         }
     } else if (!mesh) {
-        // Never seen this hash — add as full block
+        // Never seen this hash â€” add as full block
         addBlockToScene(block, null);
     }
 }
@@ -748,21 +748,32 @@ function handleRelayMessage(msg) {
             addBlockToScene(msg.block, msg.matches && msg.matches.length > 0 ? msg.matches[0] : null);
             break;
         case 'blockStub':
-            // Placeholder parent — draw a dim small node so edges can connect
+            // Placeholder parent â€” draw a dim small node so edges can connect
             if (msg.hash && !state.blockMeshes.has(msg.hash)) {
                 addStubToScene(msg.hash, msg.estimatedDaa || state.latestDaa - 1);
             }
             break;
         case 'blockFill':
-            // Lazy-loaded parent data arrived — upgrade stub to full block
+            // Lazy-loaded block data arrived - upgrade stub to full block
             if (msg.block) {
-                upgradeStub(msg.block);
+                var fillMatch = msg.matches && msg.matches.length > 0 ? msg.matches[0] : null;
+                if (fillMatch) {
+                    // Color the node for watched address match (no alert card — REST monitor handles those)
+                    addBlockToScene(msg.block, fillMatch);
+                } else {
+                    // No match — upgrade stub to normal full block
+                    upgradeStub(msg.block);
+                }
             }
             break;
         case 'watchConfirm': break;
         case 'addressAlert':
             if (msg.match) {
                 addAlert(msg.match, { hash: msg.blockHash || 'unknown', daaScore: state.latestDaa });
+                // Also color the block node in the 3D scene
+                if (msg.blockHash && state.blockMeshes.has(msg.blockHash)) {
+                    recolorBlock(msg.blockHash, msg.match.direction);
+                }
             }
             break;
         case 'pong': break;

@@ -8,6 +8,7 @@
     "dev": "node dag-relay.js"
   },
   "dependencies": {
+    "kaspa": "^0.16.0",
     "ws": "^8.16.0"
   },
   "author": "Kaspero Labs",
