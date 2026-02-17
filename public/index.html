@@ -130,7 +130,7 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg-v
         <div class="stat-item"><div class="status-dot" id="conn-dot"></div><span id="conn-text">Connecting...</span></div>
         <div class="stat-item"><span class="stat-label">BPS</span><span class="stat-value" id="stat-bps">--</span></div>
         <div class="stat-item"><span class="stat-label">DAA</span><span class="stat-value" id="stat-daa">--</span></div>
-        <div class="stat-item"><span class="stat-label">VIEWERS</span><span class="stat-value" id="stat-viewers">--</span></div>
+        <div class="stat-item"><span class="stat-label">OBJ</span><span class="stat-value" id="stat-viewers">--</span></div>
     </div>
 </div>
 <div id="address-panel">
@@ -265,7 +265,9 @@ var materials = {
 var geoBlock = new THREE.IcosahedronGeometry(CONFIG.blockSize, 1);
 var geoMatched = new THREE.IcosahedronGeometry(CONFIG.blockSizeMatched, 2);
 var geoStub = new THREE.IcosahedronGeometry(CONFIG.blockSize * 0.6, 0);
+var geoGlow = new THREE.IcosahedronGeometry(CONFIG.blockSizeMatched * 2.5, 1);
 var matStub = new THREE.MeshPhongMaterial({ color: 0x49d1cc, emissive: 0x0a2a28, emissiveIntensity: 0.2, shininess: 30, transparent: true, opacity: 0.35 });
+var matEdge = new THREE.LineBasicMaterial({ color: 0x49d1cc, transparent: true, opacity: CONFIG.edgeOpacity });
 
 // Track blocks per DAA for spread
 var blocksPerDaa = new Map();
@@ -316,12 +318,7 @@ function addBlockToScene(block, matchInfo) {
                 }
                 // Add glow if not already there
                 if (existingMesh.children.length === 0) {
-                    var gc = matchInfo.direction === 'incoming' ? 0x00ff88 : matchInfo.direction === 'outgoing' ? 0xff4466 : matchInfo.direction === 'both' ? 0xffaa00 : 0x00ff88;
-                    var gm = new THREE.Mesh(
-                        new THREE.IcosahedronGeometry(CONFIG.blockSizeMatched * 2.5, 1),
-                        new THREE.MeshBasicMaterial({ color: gc, transparent: true, opacity: 0.15, side: THREE.BackSide })
-                    );
-                    existingMesh.add(gm);
+                    existingMesh.add(new THREE.Mesh(geoGlow, getGlowMaterial(matchInfo.direction)));
                 }
             }
             return;
@@ -360,7 +357,7 @@ function addBlockToScene(block, matchInfo) {
                 var pd = state.blocks.get(parents[i]);
                 if (!pd) continue;
                 var lg = new THREE.BufferGeometry().setFromPoints([pos, pd.position]);
-                var lm = new THREE.LineBasicMaterial({ color: 0x49d1cc, transparent: true, opacity: CONFIG.edgeOpacity });
+                var lm = matEdge;
                 var line = new THREE.Line(lg, lm);
                 scene.add(line);
                 state.edgeLines.push(line);
@@ -369,21 +366,30 @@ function addBlockToScene(block, matchInfo) {
 
         // Glow for matched
         if (matchInfo) {
-            var gc = matchInfo.direction === 'incoming' ? 0x00ff88 : matchInfo.direction === 'outgoing' ? 0xff4466 : matchInfo.direction === 'both' ? 0xffaa00 : 0x80eeee;
-            var gm = new THREE.Mesh(
-                new THREE.IcosahedronGeometry(CONFIG.blockSizeMatched * 2.5, 1),
-                new THREE.MeshBasicMaterial({ color: gc, transparent: true, opacity: 0.15, side: THREE.BackSide })
-            );
-            mesh.add(gm);
+            mesh.add(new THREE.Mesh(geoGlow, getGlowMaterial(matchInfo.direction)));
         }
 
         state.bpsCounter.count++;
 
-        // Prune every 50 blocks instead of every block
-        if (state.bpsCounter.count % 50 === 0) pruneOldBlocks();
+        // Prune on a time interval, not block count
     } catch(err) {
         console.error('[addBlock]', err.message);
     }
+}
+
+// Shared glow materials (reused, never disposed individually)
+var glowMaterials = {
+    inc: new THREE.MeshBasicMaterial({ color: 0x00ff88, transparent: true, opacity: 0.15, side: THREE.BackSide }),
+    out: new THREE.MeshBasicMaterial({ color: 0xff4466, transparent: true, opacity: 0.15, side: THREE.BackSide }),
+    both: new THREE.MeshBasicMaterial({ color: 0xffaa00, transparent: true, opacity: 0.15, side: THREE.BackSide }),
+    detected: new THREE.MeshBasicMaterial({ color: 0x80eeee, transparent: true, opacity: 0.15, side: THREE.BackSide })
+};
+
+function getGlowMaterial(direction) {
+    if (direction === 'incoming') return glowMaterials.inc;
+    if (direction === 'outgoing') return glowMaterials.out;
+    if (direction === 'both') return glowMaterials.both;
+    return glowMaterials.detected;
 }
 
 // Recolor a block when REST API confirms real direction
@@ -391,30 +397,21 @@ function recolorBlock(blockHash, direction) {
     var mesh = state.blockMeshes.get(blockHash);
     if (!mesh) return;
     var newMat;
-    var glowColor;
-    if (direction === 'incoming') { newMat = materials.inc; glowColor = 0x00ff88; }
-    else if (direction === 'outgoing') { newMat = materials.out; glowColor = 0xff4466; }
-    else if (direction === 'both') { newMat = materials.both; glowColor = 0xffaa00; }
+    if (direction === 'incoming') { newMat = materials.inc; }
+    else if (direction === 'outgoing') { newMat = materials.out; }
+    else if (direction === 'both') { newMat = materials.both; }
     else return;
     mesh.material = newMat;
     mesh.userData.originalMaterial = newMat;
     mesh.userData.matchInfo = { direction: direction };
-    // Update glow if present, or add one
-    var oldGlow = null;
-    mesh.children.forEach(function(c) { oldGlow = c; });
-    if (oldGlow) {
-        mesh.remove(oldGlow);
-        if (oldGlow.geometry) oldGlow.geometry.dispose();
-        if (oldGlow.material) oldGlow.material.dispose();
+    // Remove old glow children
+    while (mesh.children.length > 0) {
+        mesh.remove(mesh.children[0]);
     }
-    var gm = new THREE.Mesh(
-        new THREE.IcosahedronGeometry(CONFIG.blockSizeMatched * 2.5, 1),
-        new THREE.MeshBasicMaterial({ color: glowColor, transparent: true, opacity: 0.15, side: THREE.BackSide })
-    );
-    mesh.add(gm);
+    // Add new glow with shared geometry + material
+    mesh.add(new THREE.Mesh(geoGlow, getGlowMaterial(direction)));
     // Switch to matched geometry if not already
     if (mesh.geometry !== geoMatched) {
-        mesh.geometry.dispose();
         mesh.geometry = geoMatched;
     }
 }
@@ -455,65 +452,37 @@ function upgradeStub(block) {
                 var pd = state.blocks.get(parents[i]);
                 if (!pd) continue;
                 var lg = new THREE.BufferGeometry().setFromPoints([mesh.position, pd.position]);
-                var lm = new THREE.LineBasicMaterial({ color: 0x49d1cc, transparent: true, opacity: CONFIG.edgeOpacity });
+                var lm = matEdge;
                 var line = new THREE.Line(lg, lm);
                 scene.add(line);
                 state.edgeLines.push(line);
             }
         }
     } else if (!mesh) {
-        // Never seen this hash Ã¢â‚¬â€ add as full block
+        // Never seen this hash - add as full block
         addBlockToScene(block, null);
     }
 }
 
-var _pruneRunning = false;
-function pruneOldBlocks() {
-    if (_pruneRunning) return;
-    if (state.blockMeshes.size <= CONFIG.maxVisibleBlocks) return;
-    _pruneRunning = true;
-
-    try {
-        var cutoff = state.latestDaa - CONFIG.daaWindow;
-
-        // Collect hashes to remove first, then delete (avoid delete-while-iterating)
-        var toRemove = [];
-        state.blocks.forEach(function(data, hash) {
-            if (data.daaScore < cutoff) toRemove.push(hash);
-        });
-
-        for (var i = 0; i < toRemove.length; i++) {
-            var hash = toRemove[i];
-            var m = state.blockMeshes.get(hash);
-            if (m) { scene.remove(m); if (m.geometry) m.geometry.dispose(); }
-            state.blockMeshes.delete(hash);
-            state.blocks.delete(hash);
-        }
-
-        // Prune edges
-        var maxE = state.blockMeshes.size * 2;
-        while (state.edgeLines.length > maxE) {
-            var l = state.edgeLines.shift();
-            scene.remove(l);
-            if (l.geometry) l.geometry.dispose();
-            if (l.material) l.material.dispose();
-        }
-
-        // Prune blocksPerDaa
-        var daaToRemove = [];
-        blocksPerDaa.forEach(function(v, k) { if (k < cutoff) daaToRemove.push(k); });
-        for (var j = 0; j < daaToRemove.length; j++) blocksPerDaa.delete(daaToRemove[j]);
-
-        // Update daaMin
-        if (state.blocks.size > 0) {
-            var mn = Infinity;
-            state.blocks.forEach(function(d) { if (d.daaScore < mn) mn = d.daaScore; });
-            state.daaMin = mn;
-        }
-    } catch(err) {
-        console.error('[prune]', err.message);
+// === REMOVE BLOCK (server-driven) ===
+function removeBlockFromScene(hash) {
+    var m = state.blockMeshes.get(hash);
+    if (m) {
+        while (m.children.length > 0) { m.remove(m.children[0]); }
+        scene.remove(m);
     }
-    _pruneRunning = false;
+    state.blockMeshes.delete(hash);
+    state.blocks.delete(hash);
+}
+
+// Lightweight edge pruner — keep edges proportional to blocks
+function pruneEdges() {
+    var maxE = state.blockMeshes.size * 2;
+    while (state.edgeLines.length > maxE) {
+        var l = state.edgeLines.shift();
+        scene.remove(l);
+        if (l.geometry) l.geometry.dispose();
+    }
 }
 
 // === CAMERA ===
@@ -522,13 +491,14 @@ var orbitAngle = 0;
 var zoomDistance = 1.0;
 var MIN_ZOOM = 0.3;
 var MAX_ZOOM = 4.0;
-// Free-cam spherical coords
-var freeCamTheta = 0.3;
-var freeCamPhi = 0.4;
-var freeCamRadius = 20;
-var freeCamCenter = new THREE.Vector3();  // frozen center point
+// Free-cam: true FPS-style, no constraints
+var freeCamPos = new THREE.Vector3();
+var freeCamLookAt = new THREE.Vector3();
+var freeCamYaw = 0;
+var freeCamPitch = 0;
 var freeCamInitialized = false;
 var isDragging = false;
+var isPanning = false;
 
 function updateCamera(dt) {
     var maxZ = 0;
@@ -552,19 +522,25 @@ function updateCamera(dt) {
         cameraTarget.lerp(new THREE.Vector3(0, 0, maxZ), 0.03);
         camera.lookAt(cameraTarget);
     } else if (state.cameraMode === "free") {
-        // Free mode: camera stays where it is, no auto-follow
         if (!freeCamInitialized) {
-            // Snapshot the current look-at point when entering free mode
-            freeCamCenter.copy(cameraTarget);
+            // Snapshot current camera state
+            freeCamPos.copy(camera.position);
+            // Calculate yaw/pitch from current look direction
+            var dir = new THREE.Vector3();
+            camera.getWorldDirection(dir);
+            freeCamYaw = Math.atan2(dir.x, dir.z);
+            freeCamPitch = Math.asin(Math.max(-0.99, Math.min(0.99, dir.y)));
             freeCamInitialized = true;
         }
-        var r = freeCamRadius;
-        var x = freeCamCenter.x + r * Math.sin(freeCamPhi) * Math.cos(freeCamTheta);
-        var y = freeCamCenter.y + r * Math.cos(freeCamPhi);
-        var z = freeCamCenter.z + r * Math.sin(freeCamPhi) * Math.sin(freeCamTheta);
-        camera.position.lerp(new THREE.Vector3(x, y, z), 0.08);
-        cameraTarget.lerp(freeCamCenter, 0.08);
-        camera.lookAt(cameraTarget);
+        // Build look direction from yaw/pitch
+        var lookDir = new THREE.Vector3(
+            Math.sin(freeCamYaw) * Math.cos(freeCamPitch),
+            Math.sin(freeCamPitch),
+            Math.cos(freeCamYaw) * Math.cos(freeCamPitch)
+        );
+        freeCamLookAt.copy(freeCamPos).add(lookDir);
+        camera.position.copy(freeCamPos);
+        camera.lookAt(freeCamLookAt);
     }
     pointLight.position.copy(camera.position);
 }
@@ -574,38 +550,68 @@ function onMouseMove(e) {
     state.mouseNDC.x = (e.clientX / window.innerWidth) * 2 - 1;
     state.mouseNDC.y = -(e.clientY / window.innerHeight) * 2 + 1;
 
-    if (state.cameraMode === 'free' && isDragging) {
-        freeCamTheta -= e.movementX * 0.005;
-        freeCamPhi = Math.max(0.15, Math.min(Math.PI - 0.15, freeCamPhi - e.movementY * 0.005));
+    if (state.cameraMode === 'free') {
+        if (isDragging) {
+            // Left-drag: look around
+            freeCamYaw -= e.movementX * 0.003;
+            freeCamPitch = Math.max(-1.4, Math.min(1.4, freeCamPitch + e.movementY * 0.003));
+        } else if (isPanning) {
+            // Right-drag: pan (strafe)
+            var right = new THREE.Vector3();
+            camera.getWorldDirection(right);
+            right.cross(camera.up).normalize();
+            var up = camera.up.clone();
+            freeCamPos.addScaledVector(right, -e.movementX * 0.05);
+            freeCamPos.addScaledVector(up, e.movementY * 0.05);
+        }
     }
 }
 function onMouseDown(e) {
     if (e.button === 0) isDragging = true;
+    if (e.button === 2) isPanning = true;
 }
 function onMouseUp(e) {
     if (e.button === 0) isDragging = false;
+    if (e.button === 2) isPanning = false;
 }
 function onWheel(e) {
     e.preventDefault();
     var delta = e.deltaY * 0.001;
 
     if (state.cameraMode === 'free') {
-        freeCamRadius = Math.max(5, Math.min(80, freeCamRadius + delta * 15));
+        // Scroll: fly forward/backward along look direction
+        var dir = new THREE.Vector3();
+        camera.getWorldDirection(dir);
+        freeCamPos.addScaledVector(dir, -delta * 30);
     } else {
         zoomDistance = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoomDistance + delta));
     }
 }
 function onClick() {
     raycaster.setFromCamera(state.mouseNDC, camera);
-    var hits = raycaster.intersectObjects(Array.from(state.blockMeshes.values()));
+    var hits = raycaster.intersectObjects(_hoverMeshCache.length > 0 ? _hoverMeshCache : Array.from(state.blockMeshes.values()));
     if (hits.length > 0) {
         var b = hits[0].object.userData.block;
         if (b && b.hash) window.open(state.explorerBase + '/blocks/' + b.hash, '_blank');
     }
 }
+var _hoverMeshCache = [];
+var _hoverCacheTime = 0;
+var _hoverFrameCount = 0;
 function checkHover() {
+    _hoverFrameCount++;
+    if (_hoverFrameCount % 3 !== 0) return; // only check every 3rd frame
+
     raycaster.setFromCamera(state.mouseNDC, camera);
-    var hits = raycaster.intersectObjects(Array.from(state.blockMeshes.values()));
+
+    // Rebuild mesh array every 500ms instead of every frame
+    var now = performance.now();
+    if (now - _hoverCacheTime > 500) {
+        _hoverMeshCache = Array.from(state.blockMeshes.values());
+        _hoverCacheTime = now;
+    }
+
+    var hits = raycaster.intersectObjects(_hoverMeshCache);
     var tt = document.getElementById('block-tooltip');
 
     if (state.hoveredBlock) {
@@ -791,6 +797,7 @@ function updateStats() {
     }
     document.getElementById('stat-bps').textContent = state.bpsCounter.value || '--';
     document.getElementById('stat-daa').textContent = state.latestDaa ? state.latestDaa.toLocaleString() : '--';
+    document.getElementById('stat-viewers').textContent = state.blockMeshes.size + '/' + state.edgeLines.length;
 }
 
 // === WEBSOCKET ===
@@ -818,53 +825,50 @@ function handleRelayMessage(msg) {
             break;
         case 'history':
             if (msg.blocks && msg.blocks.length > 0) {
-                var blocks = msg.blocks;
-                var i = 0;
-                (function batch() {
-                    var end = Math.min(i + 40, blocks.length);
-                    for (; i < end; i++) addBlockToScene(blocks[i], null);
-                    if (i < blocks.length) requestAnimationFrame(batch);
+                var hblocks = msg.blocks;
+                var hi = 0;
+                (function histBatch() {
+                    var hend = Math.min(hi + 40, hblocks.length);
+                    for (; hi < hend; hi++) addBlockToScene(hblocks[hi], null);
+                    if (hi < hblocks.length) requestAnimationFrame(histBatch);
                     else document.getElementById('loading-overlay').classList.add('hidden');
                 })();
             } else {
                 document.getElementById('loading-overlay').classList.add('hidden');
             }
             break;
+        case 'batch':
+            if (msg.remove && msg.remove.length > 0) {
+                for (var r = 0; r < msg.remove.length; r++) removeBlockFromScene(msg.remove[r]);
+            }
+            if (msg.blocks && msg.blocks.length > 0) {
+                for (var b = 0; b < msg.blocks.length; b++) {
+                    var bm = msg.matches && msg.matches[b] && msg.matches[b].length > 0 ? msg.matches[b][0] : null;
+                    addBlockToScene(msg.blocks[b], bm);
+                    if (bm && msg.blocks[b]) addAlert(bm, msg.blocks[b]);
+                }
+            }
+            break;
         case 'block':
             var blockMatch = msg.matches && msg.matches.length > 0 ? msg.matches[0] : null;
             addBlockToScene(msg.block, blockMatch);
-            // Also update alert card block count for matched blocks
-            if (blockMatch && msg.block) {
-                addAlert(blockMatch, msg.block);
-            }
+            if (blockMatch && msg.block) addAlert(blockMatch, msg.block);
             break;
         case 'blockStub':
-            // Placeholder parent Ã¢â‚¬â€ draw a dim small node so edges can connect
-            if (msg.hash && !state.blockMeshes.has(msg.hash)) {
-                addStubToScene(msg.hash, msg.estimatedDaa || state.latestDaa - 1);
-            }
+            if (msg.hash && !state.blockMeshes.has(msg.hash)) addStubToScene(msg.hash, msg.estimatedDaa || state.latestDaa - 1);
             break;
         case 'blockFill':
-            // Lazy-loaded block data arrived - upgrade stub to full block
             if (msg.block) {
-                var fillMatch = msg.matches && msg.matches.length > 0 ? msg.matches[0] : null;
-                if (fillMatch) {
-                    addBlockToScene(msg.block, fillMatch);
-                    addAlert(fillMatch, msg.block);
-                } else {
-                    // No match â€” upgrade stub to normal full block
-                    upgradeStub(msg.block);
-                }
+                var fm = msg.matches && msg.matches.length > 0 ? msg.matches[0] : null;
+                if (fm) { addBlockToScene(msg.block, fm); addAlert(fm, msg.block); }
+                else upgradeStub(msg.block);
             }
             break;
         case 'watchConfirm': break;
         case 'addressAlert':
             if (msg.match) {
                 addAlert(msg.match, { hash: msg.blockHash || 'unknown', daaScore: state.latestDaa });
-                // Also color the block node in the 3D scene
-                if (msg.blockHash && state.blockMeshes.has(msg.blockHash)) {
-                    recolorBlock(msg.blockHash, msg.match.direction);
-                }
+                if (msg.blockHash && state.blockMeshes.has(msg.blockHash)) recolorBlock(msg.blockHash, msg.match.direction);
             }
             break;
         case 'pong': break;
@@ -878,6 +882,7 @@ function updateConnUI(connected) {
 
 // === ANIMATE ===
 var lastTime = performance.now();
+var lastPruneTime = 0;
 function animate() {
     requestAnimationFrame(animate);
     var now = performance.now();
@@ -895,6 +900,12 @@ function animate() {
     // Move spine
     spineLine.position.z = (state.latestDaa - state.daaMin) * CONFIG.zScale - 120;
 
+    // Prune edges every 5 seconds (blocks are pruned server-side)
+    if (now - lastPruneTime > 5000) {
+        lastPruneTime = now;
+        pruneEdges();
+    }
+
     checkHover();
     updateStats();
     renderer.render(scene, camera);
@@ -907,6 +918,7 @@ renderer.domElement.addEventListener('mousedown', onMouseDown);
 renderer.domElement.addEventListener('mouseup', onMouseUp);
 renderer.domElement.addEventListener('wheel', onWheel, { passive: false });
 renderer.domElement.addEventListener('click', onClick);
+renderer.domElement.addEventListener('contextmenu', function(e) { e.preventDefault(); });
 document.getElementById('btn-add-address').addEventListener('click', function() { addWatchedAddress(document.getElementById('address-input').value); });
 document.getElementById('address-input').addEventListener('keydown', function(e) { if (e.key === 'Enter') addWatchedAddress(e.target.value); });
 document.getElementById('btn-clear-all').addEventListener('click', clearAll);
@@ -922,12 +934,7 @@ document.querySelectorAll('.cam-btn').forEach(function(btn) {
         btn.classList.add('active');
         state.cameraMode = btn.dataset.mode;
         zoomDistance = 1.0;
-        if (btn.dataset.mode === 'free') {
-            freeCamRadius = 20;
-            freeCamPhi = 0.4;
-            freeCamTheta = 0.3;
-            freeCamInitialized = false; // will snapshot current view on next frame
-        }
+        freeCamInitialized = false;
     });
 });
 setInterval(function() { if (state.ws && state.ws.readyState === WebSocket.OPEN) state.ws.send(JSON.stringify({ type: 'ping' })); }, 30000);

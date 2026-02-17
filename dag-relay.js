@@ -176,22 +176,22 @@ async function connectKaspaSdk() {
             // Could use acceptedTransactionIds for address matching in future
         });
 
-        // Subscribe
+// Subscribe
         await kaspaRpc.subscribeBlockAdded();
-        console.log('[borsh] âœ“ subscribeBlockAdded');
+        console.log('[borsh] ✓ subscribeBlockAdded');
 
         try {
             await kaspaRpc.subscribeVirtualDaaScoreChanged();
-            console.log('[borsh] âœ“ subscribeVirtualDaaScoreChanged');
+            console.log('[borsh] ✓ subscribeVirtualDaaScoreChanged');
         } catch (e) {
-            console.log('[borsh] âš  subscribeVirtualDaaScoreChanged:', e?.message);
+            console.log('[borsh] ⚠ subscribeVirtualDaaScoreChanged:', e?.message);
         }
 
         try {
             await kaspaRpc.subscribeVirtualChainChanged(true);
-            console.log('[borsh] âœ“ subscribeVirtualChainChanged');
+            console.log('[borsh] ✓ subscribeVirtualChainChanged');
         } catch (e) {
-            console.log('[borsh] âš  subscribeVirtualChainChanged:', e?.message);
+            console.log('[borsh] ⚠ subscribeVirtualChainChanged:', e?.message);
         }
 
         // Fetch initial history via getBlock on tips
@@ -502,25 +502,54 @@ function matchAddresses(addressHits, watchedSet) {
 }
 
 // =============================================
-// Broadcasting (UNCHANGED â€” same API to browser)
 // =============================================
+// Batched Broadcasting - rate-controlled push to clients
+// =============================================
+
+const MAX_CLIENT_BLOCKS = 2500;
+const FLUSH_INTERVAL = 200;
+const pendingBlocks = [];
 
 function stripBlock(b) {
     return { hash: b.hash, daaScore: b.daaScore, timestamp: b.timestamp, blueScore: b.blueScore, parentHashes: b.parentHashes, txCount: b.txCount };
 }
 
 function broadcastBlock(block) {
+    pendingBlocks.push(block);
+}
+
+setInterval(function flushBatch() {
+    if (pendingBlocks.length === 0) return;
+    const batch = pendingBlocks.splice(0);
+
     for (const [ws, session] of clients) {
         if (ws.readyState !== WebSocket.OPEN) continue;
-        const matches = matchAddresses(block.addressHits, session.addresses);
-        const payload = {
-            type: 'block',
-            block: stripBlock(block),
-            matches: matches.length > 0 ? matches : undefined
-        };
+
+        const addBlocks = [];
+        const addMatches = [];
+
+        for (const block of batch) {
+            addBlocks.push(stripBlock(block));
+            const matches = matchAddresses(block.addressHits, session.addresses);
+            addMatches.push(matches.length > 0 ? matches : null);
+
+            if (!session.blockWindow) session.blockWindow = [];
+            session.blockWindow.push(block.hash);
+        }
+
+        let removeHashes = null;
+        if (session.blockWindow && session.blockWindow.length > MAX_CLIENT_BLOCKS) {
+            const excess = session.blockWindow.length - MAX_CLIENT_BLOCKS;
+            removeHashes = session.blockWindow.splice(0, excess);
+        }
+
+        const payload = { type: 'batch', blocks: addBlocks, matches: addMatches };
+        if (removeHashes && removeHashes.length > 0) {
+            payload.remove = removeHashes;
+        }
         try { ws.send(JSON.stringify(payload)); } catch {}
     }
-}
+}, FLUSH_INTERVAL);
 
 function broadcast(msg) {
     const data = JSON.stringify(msg);
@@ -533,6 +562,7 @@ function sanitizeDagInfo(info) {
     if (!info) return null;
     return { networkName: info.network, blockCount: info.blockCount, headerCount: info.headerCount, tipHashes: info.tipHashes, difficulty: info.difficulty, virtualDaaScore: info.virtualDaaScore };
 }
+
 
 // =============================================
 // Memory pruning
@@ -584,7 +614,8 @@ wss.on('connection', (ws, req) => {
     const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
     console.log(`[client] ${clientId} connected from ${ip}`);
 
-    clients.set(ws, { addresses: new Set(), id: clientId });
+    const blockWindow = blockBuffer.map(b => b.hash);
+    clients.set(ws, { addresses: new Set(), id: clientId, blockWindow: blockWindow });
 
     ws.send(JSON.stringify({
         type: 'welcome',
@@ -638,7 +669,7 @@ wss.on('connection', (ws, req) => {
 function startAddressMonitor() {
     if (addressPollTimer) return;
     addressPollTimer = setInterval(pollWatchedAddresses, ADDRESS_POLL_INTERVAL);
-    console.log('[addr-monitor] Started (REST polling â€” upgrade to push pending)');
+    console.log('[addr-monitor] Started (REST polling ✓” upgrade to push pending)');
 }
 
 function stopAddressMonitor() {
