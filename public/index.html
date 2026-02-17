@@ -145,11 +145,10 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: var(--bg-v
     </div>
     <div class="panel-section legend-clickable" id="legend-panel">
         <div class="panel-title" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0;">
-            <span>Legend</span><span class="legend-arrow" id="legend-arrow" style="transition:transform 0.2s;">â–¼</span>
+            <span>Legend</span><span class="legend-arrow" id="legend-arrow" style="transition:transform 0.2s;">▼</span>
         </div>
         <div id="legend-content">
         <div class="legend-row"><div class="legend-dot" style="background:var(--block-default)"></div> Regular block</div>
-        <div class="legend-row"><div class="legend-dot" style="background:var(--chain-blue)"></div> Chain block (selected parent)</div>
         <div class="legend-row"><div class="legend-dot" style="background:var(--incoming-green)"></div> Incoming KAS to watched address</div>
         <div class="legend-row"><div class="legend-dot" style="background:var(--outgoing-red)"></div> Outgoing KAS from watched address</div>
         <div class="legend-row"><div class="legend-dot" style="background:var(--both-amber)"></div> Both incoming &amp; outgoing</div>
@@ -463,7 +462,7 @@ function upgradeStub(block) {
             }
         }
     } else if (!mesh) {
-        // Never seen this hash â€” add as full block
+        // Never seen this hash Ã¢â‚¬â€ add as full block
         addBlockToScene(block, null);
     }
 }
@@ -520,24 +519,51 @@ function pruneOldBlocks() {
 // === CAMERA ===
 var cameraTarget = new THREE.Vector3();
 var orbitAngle = 0;
+var zoomDistance = 1.0;
+var MIN_ZOOM = 0.3;
+var MAX_ZOOM = 4.0;
+// Free-cam spherical coords
+var freeCamTheta = 0.3;
+var freeCamPhi = 0.4;
+var freeCamRadius = 20;
+var freeCamCenter = new THREE.Vector3();  // frozen center point
+var freeCamInitialized = false;
+var isDragging = false;
 
 function updateCamera(dt) {
     var maxZ = 0;
     state.blockMeshes.forEach(function(m) { if (m.position.z > maxZ) maxZ = m.position.z; });
+
     if (state.cameraMode === "follow") {
-        var tp = new THREE.Vector3(10, 5, maxZ - 14);
+        var baseOffset = 14 * zoomDistance;
+        var tp = new THREE.Vector3(10 * zoomDistance, 5 * zoomDistance, maxZ - baseOffset);
         camera.position.lerp(tp, CONFIG.cameraFollowSpeed);
         cameraTarget.lerp(new THREE.Vector3(0, 0, maxZ + 5), CONFIG.cameraFollowSpeed);
         camera.lookAt(cameraTarget);
     } else if (state.cameraMode === "orbit") {
         orbitAngle += dt * 0.15;
+        var orbitRadius = 22 * zoomDistance;
         var orbitTarget = new THREE.Vector3(
-            Math.cos(orbitAngle) * 14,
-            5 + Math.sin(orbitAngle * 0.3) * 2,
-            maxZ + Math.sin(orbitAngle * 0.5) * 6
+            Math.cos(orbitAngle) * orbitRadius,
+            (6 + Math.sin(orbitAngle * 0.3) * 3) * zoomDistance,
+            maxZ + Math.sin(orbitAngle * 0.5) * 8
         );
         camera.position.lerp(orbitTarget, 0.03);
         cameraTarget.lerp(new THREE.Vector3(0, 0, maxZ), 0.03);
+        camera.lookAt(cameraTarget);
+    } else if (state.cameraMode === "free") {
+        // Free mode: camera stays where it is, no auto-follow
+        if (!freeCamInitialized) {
+            // Snapshot the current look-at point when entering free mode
+            freeCamCenter.copy(cameraTarget);
+            freeCamInitialized = true;
+        }
+        var r = freeCamRadius;
+        var x = freeCamCenter.x + r * Math.sin(freeCamPhi) * Math.cos(freeCamTheta);
+        var y = freeCamCenter.y + r * Math.cos(freeCamPhi);
+        var z = freeCamCenter.z + r * Math.sin(freeCamPhi) * Math.sin(freeCamTheta);
+        camera.position.lerp(new THREE.Vector3(x, y, z), 0.08);
+        cameraTarget.lerp(freeCamCenter, 0.08);
         camera.lookAt(cameraTarget);
     }
     pointLight.position.copy(camera.position);
@@ -547,15 +573,26 @@ function updateCamera(dt) {
 function onMouseMove(e) {
     state.mouseNDC.x = (e.clientX / window.innerWidth) * 2 - 1;
     state.mouseNDC.y = -(e.clientY / window.innerHeight) * 2 + 1;
-    if (state.cameraMode === 'free' && e.buttons === 1) {
-        camera.rotation.y -= e.movementX * 0.003;
-        camera.rotation.x = Math.max(-1, Math.min(1, camera.rotation.x - e.movementY * 0.003));
+
+    if (state.cameraMode === 'free' && isDragging) {
+        freeCamTheta -= e.movementX * 0.005;
+        freeCamPhi = Math.max(0.15, Math.min(Math.PI - 0.15, freeCamPhi - e.movementY * 0.005));
     }
 }
+function onMouseDown(e) {
+    if (e.button === 0) isDragging = true;
+}
+function onMouseUp(e) {
+    if (e.button === 0) isDragging = false;
+}
 function onWheel(e) {
+    e.preventDefault();
+    var delta = e.deltaY * 0.001;
+
     if (state.cameraMode === 'free') {
-        var d = new THREE.Vector3(); camera.getWorldDirection(d);
-        camera.position.addScaledVector(d, -e.deltaY * 0.05);
+        freeCamRadius = Math.max(5, Math.min(80, freeCamRadius + delta * 15));
+    } else {
+        zoomDistance = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoomDistance + delta));
     }
 }
 function onClick() {
@@ -643,7 +680,8 @@ var alertCards = new Map(); // key: txId -> { element, blockCount, ... }
 
 function addAlert(matchInfo, block) {
     var feed = document.getElementById('alerts-feed');
-    var txId = matchInfo.txId || (block.hash + '_' + matchInfo.address); // fallback key for block-level
+    // Key: txId if from REST API, otherwise group by address+direction (each tx gets its own card)
+    var txId = matchInfo.txId || ('live_' + matchInfo.address + '_' + (matchInfo.direction || 'incoming'));
 
     var existing = alertCards.get(txId);
     if (existing) {
@@ -652,7 +690,55 @@ function addAlert(matchInfo, block) {
         existing.element.classList.remove('alert-shake');
         void existing.element.offsetWidth;
         existing.element.classList.add('alert-shake');
+        // Update amount if the new match has better data
+        if (matchInfo.txId && !existing.hasTxId) {
+            existing.hasTxId = true;
+            var amt = '';
+            if (matchInfo.incomingKAS > 0) amt += '<span style="color:var(--incoming-green)">+' + matchInfo.incomingKAS.toFixed(4) + ' KAS</span>';
+            if (matchInfo.outgoingKAS > 0) { if (amt) amt += ' / '; amt += '<span style="color:var(--outgoing-red)">-' + matchInfo.outgoingKAS.toFixed(4) + ' KAS</span>'; }
+            if (amt) {
+                var amtEl = existing.element.querySelector('.alert-amount');
+                if (amtEl) amtEl.innerHTML = amt;
+            }
+            // Update direction label if REST gives more accurate info
+            var dirEl = existing.element.querySelector('.alert-direction');
+            if (dirEl && matchInfo.direction) {
+                dirEl.textContent = matchInfo.direction.toUpperCase();
+                dirEl.className = 'alert-direction ' + matchInfo.direction;
+            }
+            // Re-key the card under the real txId
+            alertCards.delete(txId);
+            alertCards.set(matchInfo.txId, existing);
+        }
         return;
+    }
+
+    // Check if REST alert arrived after live blocks already created a card
+    if (matchInfo.txId) {
+        var liveKey = 'live_' + matchInfo.address + '_' + (matchInfo.direction || 'incoming');
+        var liveCard = alertCards.get(liveKey);
+        if (liveCard) {
+            // Upgrade the existing live card with REST data
+            liveCard.hasTxId = true;
+            var amt2 = '';
+            if (matchInfo.incomingKAS > 0) amt2 += '<span style="color:var(--incoming-green)">+' + matchInfo.incomingKAS.toFixed(4) + ' KAS</span>';
+            if (matchInfo.outgoingKAS > 0) { if (amt2) amt2 += ' / '; amt2 += '<span style="color:var(--outgoing-red)">-' + matchInfo.outgoingKAS.toFixed(4) + ' KAS</span>'; }
+            if (amt2) {
+                var amtEl2 = liveCard.element.querySelector('.alert-amount');
+                if (amtEl2) amtEl2.innerHTML = amt2;
+            }
+            var dirEl2 = liveCard.element.querySelector('.alert-direction');
+            if (dirEl2 && matchInfo.direction) {
+                dirEl2.textContent = matchInfo.direction.toUpperCase();
+                dirEl2.className = 'alert-direction ' + matchInfo.direction;
+            }
+            // Re-key under real txId
+            alertCards.delete(liveKey);
+            alertCards.set(matchInfo.txId, liveCard);
+            liveCard.blockCount++;
+            liveCard.element.querySelector('.alert-blocks').textContent = '\u29C8 ' + liveCard.blockCount + ' blocks';
+            return;
+        }
     }
 
     var direction = matchInfo.direction || 'incoming';
@@ -680,7 +766,7 @@ function addAlert(matchInfo, block) {
         window.open(state.explorerBase + '/blocks/' + block.hash, '_blank');
     });
 
-    var card = { element: div, blockCount: 1 };
+    var card = { element: div, blockCount: 1, hasTxId: !!matchInfo.txId };
     alertCards.set(txId, card);
     feed.prepend(div);
 
@@ -745,10 +831,15 @@ function handleRelayMessage(msg) {
             }
             break;
         case 'block':
-            addBlockToScene(msg.block, msg.matches && msg.matches.length > 0 ? msg.matches[0] : null);
+            var blockMatch = msg.matches && msg.matches.length > 0 ? msg.matches[0] : null;
+            addBlockToScene(msg.block, blockMatch);
+            // Also update alert card block count for matched blocks
+            if (blockMatch && msg.block) {
+                addAlert(blockMatch, msg.block);
+            }
             break;
         case 'blockStub':
-            // Placeholder parent â€” draw a dim small node so edges can connect
+            // Placeholder parent Ã¢â‚¬â€ draw a dim small node so edges can connect
             if (msg.hash && !state.blockMeshes.has(msg.hash)) {
                 addStubToScene(msg.hash, msg.estimatedDaa || state.latestDaa - 1);
             }
@@ -758,10 +849,10 @@ function handleRelayMessage(msg) {
             if (msg.block) {
                 var fillMatch = msg.matches && msg.matches.length > 0 ? msg.matches[0] : null;
                 if (fillMatch) {
-                    // Color the node for watched address match (no alert card — REST monitor handles those)
                     addBlockToScene(msg.block, fillMatch);
+                    addAlert(fillMatch, msg.block);
                 } else {
-                    // No match — upgrade stub to normal full block
+                    // No match â€” upgrade stub to normal full block
                     upgradeStub(msg.block);
                 }
             }
@@ -812,8 +903,9 @@ function animate() {
 // === EVENTS ===
 window.addEventListener('resize', function() { camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth, window.innerHeight); });
 renderer.domElement.addEventListener('mousemove', onMouseMove);
-renderer.domElement.addEventListener('wheel', onWheel);
-renderer.domElement.addEventListener('wheel', onWheel);
+renderer.domElement.addEventListener('mousedown', onMouseDown);
+renderer.domElement.addEventListener('mouseup', onMouseUp);
+renderer.domElement.addEventListener('wheel', onWheel, { passive: false });
 renderer.domElement.addEventListener('click', onClick);
 document.getElementById('btn-add-address').addEventListener('click', function() { addWatchedAddress(document.getElementById('address-input').value); });
 document.getElementById('address-input').addEventListener('keydown', function(e) { if (e.key === 'Enter') addWatchedAddress(e.target.value); });
@@ -829,6 +921,13 @@ document.querySelectorAll('.cam-btn').forEach(function(btn) {
         document.querySelectorAll('.cam-btn').forEach(function(b) { b.classList.remove('active'); });
         btn.classList.add('active');
         state.cameraMode = btn.dataset.mode;
+        zoomDistance = 1.0;
+        if (btn.dataset.mode === 'free') {
+            freeCamRadius = 20;
+            freeCamPhi = 0.4;
+            freeCamTheta = 0.3;
+            freeCamInitialized = false; // will snapshot current view on next frame
+        }
     });
 });
 setInterval(function() { if (state.ws && state.ws.readyState === WebSocket.OPEN) state.ws.send(JSON.stringify({ type: 'ping' })); }, 30000);

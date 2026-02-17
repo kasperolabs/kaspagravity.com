@@ -4,9 +4,9 @@
  *
  * WHAT CHANGED FROM v2:
  *   v2: Poll kaspad JSON wRPC every 50ms for tips, then fetch each block
- *   v3: Subscribe to blockAdded via Kaspa SDK Borsh endpoint — blocks are PUSHED
+ *   v3: Subscribe to blockAdded via Kaspa SDK Borsh endpoint â€” blocks are PUSHED
  *
- * The browser-facing WebSocket API is IDENTICAL — no frontend changes needed.
+ * The browser-facing WebSocket API is IDENTICAL â€” no frontend changes needed.
  *
  * Requirements:
  *   - kaspa npm package with WASM SDK (nodejs/kaspa) installed
@@ -23,6 +23,9 @@ const fs = require('fs');
 const path = require('path');
 const WebSocket = require('ws');
 const https = require('https');
+
+// Kaspa SDK returns BigInt values — teach JSON.stringify to handle them
+BigInt.prototype.toJSON = function() { return Number(this); };
 
 // Load .env file if present
 const envPath = path.join(__dirname, '.env');
@@ -67,10 +70,32 @@ let dagInfo = null;
 let knownBlocks = new Set();
 let blockCount = 0;
 
-// Address monitor (REST API — still polling, subscribeUtxosChanged is next upgrade)
+// Address monitor (REST API â€” still polling, subscribeUtxosChanged is next upgrade)
 let addressPollTimer = null;
 let addressPolling = false;
 const lastSeenTxIds = new Map();
+
+// Watchdog: detect stalled push subscription
+let lastBlockTime = Date.now();
+const WATCHDOG_INTERVAL = 15000;
+const WATCHDOG_TIMEOUT = 30000;
+
+setInterval(() => {
+    if (!kaspadConnected) return;
+    const elapsed = Date.now() - lastBlockTime;
+    if (elapsed > WATCHDOG_TIMEOUT) {
+        console.log(`[watchdog] No blocks in ${Math.round(elapsed/1000)}s - reconnecting SDK`);
+        kaspadConnected = false;
+        broadcast({ type: 'status', connected: false });
+        if (kaspaRpc) { try { kaspaRpc.disconnect(); } catch(e) {} }
+        kaspaRpc = null;
+        setTimeout(connectKaspaSdk, RECONNECT_DELAY);
+    }
+}, WATCHDOG_INTERVAL);
+
+setInterval(() => {
+    console.log(`[status] connected=${kaspadConnected} blocks=${blockCount} clients=${clients.size} buf=${blockBuffer.length} known=${knownBlocks.size} addrPolling=${addressPolling} lastBlock=${Math.round((Date.now()-lastBlockTime)/1000)}s ago`);
+}, 30000);
 
 // =============================================
 // Kaspa SDK - Borsh Push Connection
@@ -91,12 +116,32 @@ async function connectKaspaSdk() {
 
         await kaspaRpc.connect();
         kaspadConnected = true;
+        lastBlockTime = Date.now();
         console.log('[borsh] Connected');
 
+        // Try to add disconnect/error listeners (SDK may not support these)
+        try {
+            kaspaRpc.addEventListener("disconnect", () => {
+                console.log('[borsh] Disconnected event received');
+                kaspadConnected = false;
+                broadcast({ type: 'status', connected: false });
+                kaspaRpc = null;
+                setTimeout(connectKaspaSdk, RECONNECT_DELAY);
+            });
+        } catch(e) { console.log('[borsh] disconnect listener not supported:', e?.message); }
+
+        try {
+            kaspaRpc.addEventListener("error", (err) => {
+                console.error('[borsh] SDK error event:', err?.message || err);
+            });
+        } catch(e) { console.log('[borsh] error listener not supported:', e?.message); }
+
         // Get initial DAG info
+        console.log('[borsh] Calling getInfo...');
         const info = await kaspaRpc.getInfo();
         console.log(`[borsh] synced=${info.isSynced} utxoIndexed=${info.isUtxoIndexed} v=${info.serverVersion}`);
 
+        console.log('[borsh] Calling getBlockDagInfo...');
         const dagResult = await kaspaRpc.getBlockDagInfo();
         dagInfo = {
             network: dagResult.networkName,
@@ -133,27 +178,27 @@ async function connectKaspaSdk() {
 
         // Subscribe
         await kaspaRpc.subscribeBlockAdded();
-        console.log('[borsh] ✓ subscribeBlockAdded');
+        console.log('[borsh] âœ“ subscribeBlockAdded');
 
         try {
             await kaspaRpc.subscribeVirtualDaaScoreChanged();
-            console.log('[borsh] ✓ subscribeVirtualDaaScoreChanged');
+            console.log('[borsh] âœ“ subscribeVirtualDaaScoreChanged');
         } catch (e) {
-            console.log('[borsh] ⚠ subscribeVirtualDaaScoreChanged:', e?.message);
+            console.log('[borsh] âš  subscribeVirtualDaaScoreChanged:', e?.message);
         }
 
         try {
             await kaspaRpc.subscribeVirtualChainChanged(true);
-            console.log('[borsh] ✓ subscribeVirtualChainChanged');
+            console.log('[borsh] âœ“ subscribeVirtualChainChanged');
         } catch (e) {
-            console.log('[borsh] ⚠ subscribeVirtualChainChanged:', e?.message);
+            console.log('[borsh] âš  subscribeVirtualChainChanged:', e?.message);
         }
 
         // Fetch initial history via getBlock on tips
         await loadInitialHistory();
 
     } catch (err) {
-        console.error('[borsh] Connection failed:', err.message);
+        console.error('[borsh] Connection failed:', err?.message || err, err?.stack || '');
         kaspadConnected = false;
         broadcast({ type: 'status', connected: false });
         console.log(`[borsh] Retrying in ${RECONNECT_DELAY / 1000}s...`);
@@ -163,6 +208,8 @@ async function connectKaspaSdk() {
 
 // Handle push block-added event
 function handleBlockAdded(event) {
+    lastBlockTime = Date.now();
+
     // The event contains the full block data
     const blockData = event?.block || event?.data?.block || event;
     if (!blockData) return;
@@ -392,7 +439,7 @@ function jsonRpc(method, params) {
 }
 
 // =============================================
-// Block parsing (JSON wRPC format — kept for compatibility)
+// Block parsing (JSON wRPC format â€” kept for compatibility)
 // =============================================
 
 function parseBlock(blockData) {
@@ -455,7 +502,7 @@ function matchAddresses(addressHits, watchedSet) {
 }
 
 // =============================================
-// Broadcasting (UNCHANGED — same API to browser)
+// Broadcasting (UNCHANGED â€” same API to browser)
 // =============================================
 
 function stripBlock(b) {
@@ -527,7 +574,7 @@ const httpServer = http.createServer((req, res) => {
 });
 
 // =============================================
-// WebSocket Server (browser clients) — UNCHANGED API
+// WebSocket Server (browser clients) â€” UNCHANGED API
 // =============================================
 
 const wss = new WebSocket.Server({ server: httpServer });
@@ -585,13 +632,13 @@ wss.on('connection', (ws, req) => {
 });
 
 // =============================================
-// Address Monitor (REST API — kept for now, will upgrade to subscribeUtxosChanged)
+// Address Monitor (REST API â€” kept for now, will upgrade to subscribeUtxosChanged)
 // =============================================
 
 function startAddressMonitor() {
     if (addressPollTimer) return;
     addressPollTimer = setInterval(pollWatchedAddresses, ADDRESS_POLL_INTERVAL);
-    console.log('[addr-monitor] Started (REST polling — upgrade to push pending)');
+    console.log('[addr-monitor] Started (REST polling â€” upgrade to push pending)');
 }
 
 function stopAddressMonitor() {
@@ -610,21 +657,24 @@ async function pollWatchedAddresses() {
     if (addressPolling) return;
     addressPolling = true;
 
+    // Safety: auto-unstick after 10s no matter what
+    const safetyTimer = setTimeout(() => { addressPolling = false; }, 10000);
+
     try {
         const addresses = getAllWatchedAddresses();
-        if (addresses.size === 0) { addressPolling = false; return; }
+        if (addresses.size === 0) { clearTimeout(safetyTimer); addressPolling = false; return; }
 
         const addrArr = Array.from(addresses);
         const idx = Math.floor(Date.now() / ADDRESS_POLL_INTERVAL) % addrArr.length;
         const addr = addrArr[idx];
 
         const txs = await fetchAddressTxs(addr);
-        if (!txs || !txs.length) { addressPolling = false; return; }
+        if (!txs || !txs.length) { clearTimeout(safetyTimer); addressPolling = false; return; }
 
         if (!lastSeenTxIds.has(addr)) {
             lastSeenTxIds.set(addr, new Set());
             txs.forEach(t => { if (t.transaction_id) lastSeenTxIds.get(addr).add(t.transaction_id); });
-            addressPolling = false;
+            clearTimeout(safetyTimer); addressPolling = false;
             return;
         }
         const seen = lastSeenTxIds.get(addr);
@@ -682,20 +732,25 @@ async function pollWatchedAddresses() {
             }
         }
     } catch (err) { /* skip */ }
+    clearTimeout(safetyTimer);
     addressPolling = false;
 }
 
 function fetchAddressTxs(addr) {
     return new Promise((resolve) => {
         const url = `${KASPA_API}/addresses/${addr}/full-transactions?limit=5&resolve_previous_outpoints=light`;
-        https.get(url, { timeout: 3000 }, (res) => {
+        const req = https.get(url, { timeout: 3000 }, (res) => {
             let data = '';
             res.on('data', c => data += c);
             res.on('end', () => {
                 try { resolve(JSON.parse(data)); }
                 catch { resolve(null); }
             });
-        }).on('error', () => resolve(null));
+        });
+        req.on('error', () => resolve(null));
+        req.on('timeout', () => { req.destroy(); resolve(null); });
+        // Hard kill after 5s if nothing happened
+        setTimeout(() => { try { req.destroy(); } catch(e) {} resolve(null); }, 5000);
     });
 }
 
